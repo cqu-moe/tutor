@@ -155,7 +155,7 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   assert.match(context, /Status: pending verification/);
   assert.match(context, /No learner feedback means no memory write/);
   assert.match(context, /Ground claims in supplied course material/);
-  assert.match(await readFile(path.join(dataDir, "calculus", "route-draft.md"), "utf8"), /One compact example/);
+  assert.match(JSON.parse(await readFile(path.join(dataDir, "calculus", "draft.json"), "utf8")).route, /One compact example/);
   const beforeMaintenance = await memory("Digital Design", "Show current learner memory");
   assert.ok(beforeMaintenance.includes(preference) && beforeMaintenance.includes(progress));
   const uploadsBeforeMaintenance = uploads;

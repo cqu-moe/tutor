@@ -8,8 +8,8 @@ By default, Tutor stores learner memory in `<data-dir>/.memory`, separate from t
 
 Course directories retain a `.course-name` marker containing the exact trimmed,
 Unicode-NFC course name. Existing courses without that marker are migrated from
-`context.json` on their next resume. A marker-less directory with neither a
-usable `context.json` nor a marker created by the current invocation is treated
+the context in `draft.json` (or legacy `context.json`) on their next resume. A marker-less directory with neither
+usable context nor a marker created by the current invocation is treated
 as unowned legacy state and rejected, even when empty; move it aside, manually
 record the exact original course name in `.course-name`, or use another course
 name/data directory. If two names produce the same directory slug—for example,

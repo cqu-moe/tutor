@@ -41,7 +41,7 @@ The adapters use the official HTTP APIs without extra dependencies:
   `mistral-ocr-latest`, base64 PDF/image input, inline tables and extracted images.
   The concrete returned model and page metadata are retained in `response.json`.
 
-PDF pages are extracted with Poppler before upload. `context.json` retains the
+PDF pages are extracted with Poppler before upload. The context in `draft.json` retains the
 selected original page number, saved page PDF, original page image, parsed
 Markdown and its resource directory. Screenshots retain their display name and
 saved source. Extracted images remain beside the Markdown that references them.
@@ -64,6 +64,10 @@ upload or later model step fails. New attempts use separate staging directories,
 and replacement of an incomplete cache preserves the old directory. A failed
 OCR run leaves the previous context, route and lecture files intact. Concurrent
 processes writing the same course directory are not supported.
+
+MinerU's downloaded ZIP is deleted only after the parsed cache is validated and
+committed. Extraction or cache-validation failure retains the ZIP for diagnosis;
+a cleanup failure does not invalidate an already committed cache.
 
 The Mistral `latest` alias is intentionally part of the saved identity; existing
 results do not automatically refresh when the provider changes that alias. To

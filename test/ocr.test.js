@@ -199,7 +199,7 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
   const env = { ...process.env, MINERU_API_TOKEN: "test-only-mineru", MISTRAL_API_KEY: "test-only-mistral", NO_COLOR: "1" };
   try {
     await runCli(cli, [...common, "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`], "confirm\n", env);
-    let context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
+    let context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     const savedMineruFiles = await readdir(path.join(dataDir, "digital-design", "parsed", "mineru"), { recursive: true });
     assert.ok(!savedMineruFiles.some((file) => file.endsWith(".zip")));
     assert.equal(context.pages[0].sourcePage, 1);
@@ -211,7 +211,7 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     assert.equal(mineruTasks, 1);
 
     await runCli(cli, [...common, "--ocr", "mistral", "--mistral-base-url", `http://${mistralAddress.address}:${mistralAddress.port}`], "confirm\n", env);
-    context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
+    context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     assert.equal(context.pages[0].sourcePage, 1);
     assert.match(context.pages[0].markdown, /Boolean Functions/);
     await readFile(path.join(context.pages[0].parsedDirectory, "img-0.png"));
@@ -220,7 +220,7 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     await runCli(cli, [...common, "--ocr", "mistral", "--mistral-base-url", `http://${mistralAddress.address}:${mistralAddress.port}`], "confirm\n", env);
     assert.equal(mistralCalls, 1);
 
-    const mistralContext = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
+    const mistralContext = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     const oldDelivery = path.join(dataDir, "digital-design", "lecture.md");
     await writeFile(oldDelivery, "Previous good lecture\n");
     await assert.rejects(
@@ -240,7 +240,7 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
       },
     );
     assert.deepEqual(
-      JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json"))),
+      JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context,
       mistralContext,
     );
     assert.match(mistralContext.pages[0].markdown, /Boolean Functions/);
@@ -260,10 +260,10 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
       assert.doesNotMatch(error.message, /test-only-mistral|secret-signature/);
       return true;
     });
-    assert.deepEqual(JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json"))), mistralContext);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context, mistralContext);
     mistralMode = "documents-fail";
     await runCli(cli, expanded, "confirm\n", env);
-    const recovered = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
+    const recovered = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     assert.deepEqual(recovered.pages.map((page) => page.sourcePage), [2]);
     assert.equal(recovered.screenshots.length, 1);
     assert.deepEqual(await readFile(recovered.screenshots[0].source), await readFile(screenshot));

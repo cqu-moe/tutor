@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { memoryTools, prepareMemory } from "./memory.ts";
+import { stageTools } from "./stage-tools.ts";
 
 const defaultModel = "magpie/codex/gpt-6.1-sol";
 
@@ -24,8 +25,12 @@ export async function createTutorSession(
   courseDir: string,
   agentDir: string | undefined,
   model: string | undefined,
-  options?: { systemPrompt?: string; tools?: string[]; sessionManager?: SessionManager },
+  options?: { systemPrompt?: string; tools?: string[]; sessionManager?: SessionManager; writeRoot?: string },
 ): Promise<AgentSession> {
+  const tools = options?.tools ?? ["read"];
+  if (tools.some((tool) => ["write", "edit", "bash"].includes(tool)) && !options?.writeRoot) {
+    throw new Error("Writable Tutor tools require a lecture stage");
+  }
   const effectiveAgentDir = agentDir ?? getAgentDir();
   const modelRuntime = await ModelRuntime.create({
     authPath: path.join(effectiveAgentDir, "auth.json"),
@@ -57,7 +62,8 @@ export async function createTutorSession(
     agentDir: effectiveAgentDir,
     modelRuntime,
     model: requested.model,
-    tools: [...(options?.tools ?? ["read", "bash", "edit", "write"]), ...memoryTools],
+    tools: [...tools, ...memoryTools],
+    customTools: options?.writeRoot ? await stageTools(courseDir, options.writeRoot) : [],
     resourceLoader,
     sessionManager: options?.sessionManager ?? SessionManager.inMemory(),
   });

@@ -4,7 +4,7 @@ This page is the reproducible acceptance path. It keeps four kinds of evidence s
 
 ## Runtime
 
-The integration was checked with Node.js 22 and the lockfile-pinned Pi 0.82.1 and pi-memory 0.4.2 packages. Export also needs Python 3.10+, Recto 0.3.1, Pandoc 3.9.0.2+, Typst 0.15.1+, and Poppler. Diagram generation additionally needs the configured Schemdraw 0.23 Python environment (`TUTOR_DIAGRAM_PYTHON`) and CeTZ 0.5.3 package cache (`TUTOR_TYPST_PACKAGE_CACHE`). Install these tools in user-local or project-local locations; Tutor does not require a global install.
+The integration was checked on macOS with Node.js 22 (22.12+ required), lockfile-pinned Pi 0.82.1, pi-memory 0.4.2 and sandbox runtime 0.0.81. Export also needs Python 3.10+, Recto 0.3.1, Pandoc 3.9.0.2+, Typst 0.15.1+, and Poppler. Diagram generation additionally needs the configured Schemdraw 0.23 Python environment (`TUTOR_DIAGRAM_PYTHON`) and populated CeTZ 0.5.3 package cache (`TUTOR_TYPST_PACKAGE_CACHE`). Install these tools in user-local or project-local locations; Tutor does not require a global install. See [sandbox platform requirements](diagrams.md) before running on Linux.
 
 Use one course directory and one learner-memory directory per concurrent writer. Real acceptance data, original PDFs, OCR bodies, transcripts, credentials, rendered pages, and reports stay outside the Git repository.
 

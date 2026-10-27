@@ -8,7 +8,7 @@ After a teaching route is confirmed, Tutor uses the configured Pi model and inst
 - `TUTOR_PYTHON`: optional path to a Python interpreter that passed Recto's dependency check. When omitted, Tutor uses `python3`.
 - `TUTOR_STUDY_NOTES`: optional path to the installed `study-notes/SKILL.md`. By default Tutor reads the sibling skill beside `TUTOR_RECTO_ROOT`.
 - `TUTOR_DIAGRAM_PYTHON`: Python interpreter with the pinned diagram dependencies in `requirements-diagrams.txt`; required for Schemdraw circuit generation.
-- `TUTOR_TYPST_PACKAGE_CACHE`: local Typst package cache containing or able to fetch the pinned CeTZ package.
+- `TUTOR_TYPST_PACKAGE_CACHE`: local Typst package cache already containing the pinned CeTZ package and its dependencies.
 
 Recto 0.3.1 requires Python 3.10+, python-docx 1.2.x and lxml 5.x/6.x, Pandoc 3.9.0.2+, and Typst 0.15.1+. Run its `doctor.py --style reference` using your chosen interpreter. Use the desktop bundled Python when available; do not install globally. Pi remains pinned in the package lock.
 
@@ -20,9 +20,10 @@ output/document.pdf
 output/media/
 output/figures/
 output/typst/document.typ
+output/lecture.json
 ```
 
-The delivery has one Markdown source, one shared media directory, native figure-regeneration sources, Typst, and PDF. Original page images and screenshots are sent to the model for verification. OCR-extracted figures carry page/screenshot provenance and may be selected for the final lecture. Whole-page screenshots are not offered as final illustrations. Generated static diagrams follow [diagrams.md](diagrams.md).
+The delivery has one Markdown source, one shared media directory, native figure-regeneration sources, Typst, and PDF. `output/lecture.json` binds the delivered lecture to its confirmed route and source context; it is local resume metadata containing source paths. Original page images and screenshots are sent to the model for verification. OCR-extracted figures carry page/screenshot provenance and may be selected for the final lecture. Whole-page screenshots are not offered as final illustrations. Generated static diagrams follow [diagrams.md](diagrams.md).
 
 Chinese is the default with English key terms retained on first use; current user adjustments prevail. The confirmed route controls order and explicit scope changes. Coverage is derived from every selected source, including details omitted by route headings. The lecture requests prerequisites, reasoning, worked examples, source citations, marked additions, and a coverage note. These instructions guide the model; they are not an automated proof of teaching quality. Recto's reference template uses Chinese typography; other-language typography needs separate visual verification.
 
@@ -36,7 +37,7 @@ To retry generation from the saved route without re-importing or calling OCR:
 node bin/tutor.js --course "Digital Design" --data-dir .tutor --generate
 ```
 
-The saved context must already have a confirmed route. `--generate` rejects new PDF/page/screenshot options and checks confirmation again in the new process. Model and agent directory options still apply. It regenerates the lecture; it is not a revision command. The parser/route artifacts and originals are preserved. A new import resets confirmation before generating a new route.
+`draft.json` stores the candidate context, route and confirmation together. `--generate` rejects new PDF/page/screenshot options and requires a confirmed draft in the new process. Model and agent directory options still apply. A new import changes only the draft: cancelling it or failing its export leaves the published lecture and its `output/lecture.json` together. `--revise` always uses that published pair. A successful export publishes its metadata with the files; a failed export can be retried with `--generate`. Existing `context.json` / `route.md` courses are read without deleting those files, and legacy output is bound to that metadata before accepting a new import.
 
 ## Rebuild
 

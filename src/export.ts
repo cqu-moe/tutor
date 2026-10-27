@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { access, cp, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { Lecture } from "./lecture-state.ts";
 
 const execute = promisify(execFile);
 
-export async function exportLecture(courseDir: string, source: string) {
+export async function exportLecture(courseDir: string, source: string, lecture: Lecture) {
   const rectoRoot = process.env.TUTOR_RECTO_ROOT;
   if (!rectoRoot) throw new Error(`Set TUTOR_RECTO_ROOT to the installed Recto skill directory; source retained at ${source}`);
   const stage = await mkdtemp(path.join(courseDir, ".export-"));
@@ -32,6 +33,7 @@ export async function exportLecture(courseDir: string, source: string) {
     await mkdir(path.join(next, "media"), { recursive: true });
     await execute("typst", ["compile", "--root", ".", "--font-path", "typst/fonts",
       "typst/document.typ", "document.pdf"], { cwd: next, maxBuffer: 32 * 1024 * 1024 });
+    await writeFile(path.join(next, "lecture.json"), `${JSON.stringify(lecture, null, 2)}\n`);
     try {
       await rename(output, previous);
       backedUp = true;

@@ -47,7 +47,7 @@ Set `api` and `input` per provider or per model. A gateway can expose multiple p
 
 Teaching-route prompts attach every original PDF page render and every original screenshot. Tutor rejects the selected model before making a request when its Pi `input` metadata does not include `image`. `.jpg` and `.jpeg` files are sent as `image/jpeg`; other supported CLI image extensions use their lower-case MIME type.
 
-Unknown Pi API identifiers are reported as model configuration failures. Authentication and model HTTP failures keep already prepared course materials, parse results, and `context.json` available.
+Unknown Pi API identifiers are reported as model configuration failures. Authentication and model HTTP failures keep already prepared course materials, parse results, and `draft.json` available. Published lecture metadata remains in `output/lecture.json`.
 
 ## Credentials and diagnostics
 

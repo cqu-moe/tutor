@@ -88,6 +88,22 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
     stage ??= JSON.stringify(messages).match(/Lecture stage: `([^`]+)`/)?.[1];
     if (!stage) return response.writeHead(500).end(JSON.stringify({ error: { message: "lecture prompt did not disclose the stage" } }));
     const completed = messages.filter((message) => message.role === "tool").length;
+    if (mode.startsWith("outside-")) {
+      if (completed && mode === "outside-final-write") return sse(response, { content: "# Overwritten published lecture\n\n<div>Force export failure</div>" });
+      if (completed) return response.writeHead(401).end(JSON.stringify({ error: { message: "fixture stops after the attempted write" } }));
+      const target = path.join(courseDir, "output", "content.md");
+      const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+      const alias = path.join(stage, "outside-link");
+      let command = `printf overwritten > ${quote(target)}`;
+      if (mode === "outside-hardlink" || mode === "outside-symlink") {
+        command = `ln ${mode === "outside-symlink" ? "-s " : ""}${quote(target)} ${quote(alias)} && printf overwritten > ${quote(alias)}`;
+      }
+      if (mode === "outside-final-write") command = `ln -s ${quote(target)} ${quote(path.join(stage, "content.md"))}`;
+      const escape = mode === "outside-write"
+        ? call("write", { path: target, content: "overwritten outside the stage" })
+        : call("bash", { command });
+      return sse(response, escape, "tool_calls");
+    }
     if (mode === "late-error" && completed === 5) return response.writeHead(401).end(JSON.stringify({ error: { message: "fixture model unavailable after diagrams" } }));
     if (completed === 0) {
       return sse(response, call("write", { path: path.join(stage, "figures", "f4.py"), content: [
@@ -126,7 +142,7 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
     if (completed === 2) {
       const command = [
         `mkdir -p ${JSON.stringify(path.join(stage, "media"))} ${JSON.stringify(path.join(stage, "qa"))}`,
-        `pwd > ${JSON.stringify(path.join(root, "observed-session-cwd"))}`,
+        `pwd > ${JSON.stringify(path.join(stage, "figures", "observed-session-cwd"))}`,
         `"${process.env.TUTOR_DIAGRAM_PYTHON}" ${JSON.stringify(path.join(stage, "figures", "f4.py"))} ${JSON.stringify(path.join(stage, "media", "f4.svg"))}`,
         `typst compile --package-cache-path "${process.env.TUTOR_TYPST_PACKAGE_CACHE}" --font-path "${path.join(process.env.TUTOR_RECTO_ROOT, "assets/fonts")}" ${JSON.stringify(path.join(stage, "figures", "f4-view.typ"))} ${JSON.stringify(path.join(stage, "media", "f4-view.svg"))}`,
         `cat > ${JSON.stringify(path.join(stage, "qa", "preview.typ"))} <<'PREVIEW'\n#set page(width: auto, height: auto, margin: 4pt)\n#grid(columns: 1, image("media/f4.svg", width: 12cm), image("media/f4-view.svg", width: 12cm))\nPREVIEW`,
@@ -166,9 +182,9 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
   const common = ["--course", "Digital Design", "--data-dir", dataDir, "--agent-dir", agentDir, "--model", "tutorTest/diagram-model", "--generate"];
   const env = { ...process.env, NO_COLOR: "1" };
   const generated = await runCli(common, "", env);
-  assert.equal(generated.code, 0, generated.stderr);
+  assert.equal(generated.code, 0, `${generated.stderr}\n${JSON.stringify(modelRequests.at(-1)?.messages.filter((message) => message.role === "tool" && typeof message.content === "string"))}`);
   assert.match(generated.stdout, /Lecture exported/);
-  assert.equal(await readFile(path.join(root, "observed-session-cwd"), "utf8"), `${await realpath(courseDir)}\n`);
+  assert.equal(await readFile(path.join(courseDir, "output", "figures", "observed-session-cwd"), "utf8"), `${await realpath(courseDir)}\n`);
   const output = path.join(courseDir, "output");
   const markdown = await readFile(path.join(output, "content.md"), "utf8");
   assert.match(markdown, /media\/[^" ]+f4\.svg/);
@@ -194,9 +210,17 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
   assert.match(pdfText, /Boolean Functions/);
   await run("typst", ["compile", "--root", ".", "--font-path", "typst/fonts", "typst/document.typ", path.join(root, "rebuilt.pdf")], { cwd: output });
 
-  const goodFiles = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg|py)$/.test(file));
+  const goodFiles = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg|py|json)$/.test(file));
   const goodBytes = await Promise.all(goodFiles.map((file) => readFile(path.join(output, file))));
+  for (const attempt of ["outside-write", "outside-bash", "outside-symlink", "outside-hardlink", "outside-final-write"]) {
+    mode = attempt;
+    stage = undefined;
+    const rejected = await runCli(common, "", env);
+    assert.equal(rejected.code, 1);
+    for (const [index, file] of goodFiles.entries()) assert.ok((await readFile(path.join(output, file))).equals(goodBytes[index]), `${attempt} changed ${file}`);
+  }
   mode = "late-error";
+  stage = undefined;
   const failed = await runCli(common, "", env);
   assert.equal(failed.code, 1);
   assert.match(failed.stderr, /generation failed/);

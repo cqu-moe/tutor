@@ -12,9 +12,13 @@ python3 -m venv .tutor/diagram-venv
 export TUTOR_DIAGRAM_PYTHON="$PWD/.tutor/diagram-venv/bin/python"
 ```
 
-Set `TUTOR_TYPST_PACKAGE_CACHE` to a local Typst package cache. CeTZ sources pin `@preview/cetz:0.5.3`; the first compilation may download that package and its package dependencies into the cache. Later offline generation reuses the cache. No global Python or Typst package installation is required.
+Set `TUTOR_TYPST_PACKAGE_CACHE` to a local Typst package cache. CeTZ sources pin `@preview/cetz:0.5.3`; populate that cache and its dependencies before generation, for example by compiling a tiny file containing `#import "@preview/cetz:0.5.3"` with `typst compile --package-cache-path "$TUTOR_TYPST_PACKAGE_CACHE"`. Agent commands cannot download missing packages or modify the shared cache. No global Python or Typst package installation is required.
 
 The lecture agent keeps its session working directory at the course directory. It receives the absolute one-time `.lecture-*` stage and writes native Python or Typst/CeTZ sources under `figures/`, generated SVGs under `media/`, and temporary PNG previews under `qa/`. It must read both the preview and the relevant original page before publishing. For Schemdraw logic trees, use explicit `and`/`or`/`not` expressions; `gateH=1.5` avoids the NOT-symbol overlap seen with the default height.
+
+Pi's native `write`, `edit` and `bash` schemas are retained, with mutations executed through the pinned Anthropic sandbox runtime 0.0.81. Only the current stage is writable; absolute paths, parent traversal, symlinks and cross-boundary hardlinks cannot write the published output. Temporary/cache writes stay under the stage's `.tmp`, and the runtime's convenience write directories are explicitly denied. Shell networking is disabled; Tutor's host model/OCR requests remain available. This is a write boundary, not isolation of all readable local files or inherited environment variables.
+
+Node 22.12+ and macOS or Linux are required. Linux also needs the runtime's bubblewrap, socat and ripgrep dependencies; macOS uses system Seatbelt with an added hardlink prohibition. Sandbox initialization or profile mismatch stops the tool without an unsandboxed fallback. The regression suite runs real file tools and drawing commands on macOS; Linux behavior still requires platform validation.
 
 ## Delivery and checks
 
@@ -30,4 +34,4 @@ Set `TUTOR_RECTO_ROOT`, `TUTOR_PYTHON`, `TUTOR_DIAGRAM_PYTHON`, and `TUTOR_TYPST
 node --test test/diagrams.test.js
 ```
 
-The test invokes the actual CLI and Pi tools, fixes model responses only at the HTTP boundary, uses real Schemdraw, CeTZ, Typst, Recto, Pandoc, and Poppler, checks the eight-row F4 truth table and SVG labels, rebuilds the delivered Typst, and verifies a late model failure leaves the prior delivery unchanged.
+The test invokes the actual CLI and Pi tools, fixes model responses only at the HTTP boundary, uses real Schemdraw, CeTZ, Typst, Recto, Pandoc, and Poppler, checks the eight-row F4 truth table and SVG labels, rebuilds the delivered Typst, and verifies a late model failure leaves the prior delivery unchanged. It also attempts native file writes, shell writes, symlink writes and hardlink writes against the published lecture, including redirecting the host's final Markdown save through a symlink, and checks that every delivered file remains unchanged.

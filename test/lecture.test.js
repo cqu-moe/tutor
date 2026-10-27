@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -102,11 +102,13 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const modelSecret = "lecture-command-key";
   const lectureRequests = [];
   const routeRequests = [];
+  const revisionRequests = [];
   const model = await serve(t, async (request, response) => {
     const payload = await body(request);
     const messages = JSON.stringify(payload.messages);
     const prompt = userText(payload.messages.findLast((message) => message.role === "user"));
     if (prompt.includes("Edit exactly .revision-")) {
+      revisionRequests.push(payload);
       if (payload.messages.at(-1)?.role === "tool") return sse(response, { content: "Revision complete." });
       const source = prompt.match(/\.revision-[^\s]+\/content\.md/)?.[0];
       return sse(response, {
@@ -135,13 +137,13 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
         content: "I will inspect the source before writing.",
         tool_calls: [{ index: 0, id: "read-source", type: "function", function: mode === "memory-error"
           ? { name: "memory_restore", arguments: JSON.stringify({ recoveryId: "invalid-id" }) }
-          : { name: "read", arguments: JSON.stringify({ path: "route.md" }) } }],
+          : { name: "read", arguments: JSON.stringify({ path: "draft.json" }) } }],
       }, "tool_calls");
     }
     const content = mode === "export-error" ? "# Draft retained\n\n<div>Unsupported raw HTML</div>" : [
       "# Gates first", "", "布尔函数（Boolean function）在二值输入上定义输出。原公式见 PDF 第 1 页。", "",
       "\\[F = xy\\]", "", "The inline expression is \\(xy\\).", "", "| x | y | F |", "|---|---|---|", "| 0 | 0 | 0 |", "| 0 | 1 | 0 |", "| 1 | 0 | 0 |", "| 1 | 1 | 1 |", "",
-      "![AND gate，来源 PDF 第 2 页](media/parsed-page-2/images/gate.svg)", "", "新增例题：输入都是 1 时，与运算才输出 1。", "",
+      `![AND gate，来源 PDF 第 ${prompt.includes("Requested chapter: Chapter Two") ? 3 : 2} 页](media/parsed-page-${prompt.includes("Requested chapter: Chapter Two") ? 3 : 2}/images/gate.svg)`, "", "新增例题：输入都是 1 时，与运算才输出 1。", "",
     ].join("\n");
     return sse(response, { content });
   });
@@ -159,7 +161,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const unconfirmed = await runCli(args, "", env);
   assert.equal(unconfirmed.code, 0, unconfirmed.stderr);
   assert.match(unconfirmed.stdout, /Route was not confirmed/);
-  const importContext = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+  const importContext = JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8")).context;
   assert.equal(importContext.selection.type, "chapter");
   assert.equal(importContext.selection.title, "Chapter One");
   assert.equal(importContext.selection.startHeading, "Chapter One");
@@ -205,7 +207,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const learnerMemory = await runCli([...common, "--memory", "Show my learner memory"], "", env);
   assert.equal(learnerMemory.code, 0, learnerMemory.stderr);
   assert.match(learnerMemory.stdout, /empty or does not exist/, "generation without learner feedback must not create memory facts");
-  const files = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg)$/.test(file));
+  const files = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg|json)$/.test(file));
   const good = await Promise.all(files.map((file) => readFile(path.join(output, file))));
   // Generation is a separate caller: route/maintenance tests cannot catch it bypassing the shared guard.
   for (const failure of ["export-error", "truncated", "model-error", "memory-error"]) {
@@ -220,7 +222,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
       assert.doesNotMatch(failed.stderr, /lecture-command-key|upstream-private-detail/);
     }
     assert.deepEqual(await Promise.all(files.map((file) => readFile(path.join(output, file)))), good);
-    const context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+    const context = JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8")).context;
     await readFile(path.join(context.pages[0].parsedDirectory, "full.md"));
     await readFile(context.pages[0].pagePdf);
   }
@@ -233,6 +235,43 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.equal(resumed.code, 0, resumed.stderr);
   assert.match(resumed.stdout, /Lecture exported/);
 
+  // A candidate import must not replace the lecture that revisions resume.
+  const previousContent = await readFile(path.join(output, "content.md"), "utf8");
+  const previousVersion = await readFile(path.join(output, "lecture.json"), "utf8");
+  // Resume a real legacy layout before importing a replacement candidate.
+  const legacy = JSON.parse(previousVersion);
+  await writeFile(path.join(courseDir, "context.json"), JSON.stringify(legacy.context));
+  await writeFile(path.join(courseDir, "route.md"), legacy.route);
+  await rm(path.join(courseDir, "draft.json"));
+  await rm(path.join(output, "lecture.json"));
+  const replacementArgs = [...common, "--pdf", pdf, "--chapter", "Chapter Two", "--mineru-base-url", ocr];
+  const cancelled = await runCli(replacementArgs, "", env);
+  assert.equal(cancelled.code, 0, cancelled.stderr);
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), previousContent);
+  assert.equal(await readFile(path.join(output, "lecture.json"), "utf8"), previousVersion);
+  const afterCancel = await runCli([...common, "--revise", "Add the missing derivation"], "", env);
+  assert.equal(afterCancel.code, 0, "Cancelling a candidate import must leave the published lecture revisable: " + afterCancel.stderr);
+
+  const beforeReplacement = await readFile(path.join(output, "content.md"), "utf8");
+  mode = "export-error";
+  const replacementFailure = await runCli(replacementArgs, "confirm\n", env);
+  assert.equal(replacementFailure.code, 1);
+  assert.match(replacementFailure.stderr, /Recto export failed/);
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), beforeReplacement);
+  assert.equal(await readFile(path.join(output, "lecture.json"), "utf8"), previousVersion);
+  mode = "success";
+  const afterFailure = await runCli([...common, "--revise", "Add the missing derivation"], "", env);
+  assert.equal(afterFailure.code, 0, afterFailure.stderr);
+  const resumedRevisionPrompt = userText(revisionRequests.at(-1).messages.findLast((message) => message.role === "user"));
+  assert.match(resumedRevisionPrompt, /Requested chapter: Chapter One/);
+  assert.match(resumedRevisionPrompt, /Gates first; Boolean functions second/);
+  const retryReplacement = await runCli([...common, "--generate"], "", env);
+  assert.equal(retryReplacement.code, 0, retryReplacement.stderr);
+  const replacementVersion = JSON.parse(await readFile(path.join(output, "lecture.json"), "utf8"));
+  assert.equal(replacementVersion.context.selection.title, "Chapter Two");
+  assert.match(replacementVersion.route, /Boolean functions first; gates second/);
+  assert.match(await readFile(path.join(output, "content.md"), "utf8"), /AND gate，来源 PDF 第 3 页/);
+
   const lastChapterDataDir = path.join(root, "last-chapter-data");
   const lastChapter = await runCli([
     "--course", "Digital Design", "--data-dir", lastChapterDataDir, "--agent-dir", agentDir,
@@ -243,7 +282,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const lastPrompt = JSON.stringify(routeRequests.at(-1).messages);
   assert.match(lastPrompt, /It runs through the final PDF page 3/);
   assert.doesNotMatch(lastPrompt, /do not cover end of PDF/);
-  const lastContext = JSON.parse(await readFile(path.join(lastChapterDataDir, "digital-design", "context.json"), "utf8"));
+  const lastContext = JSON.parse(await readFile(path.join(lastChapterDataDir, "digital-design", "draft.json"), "utf8")).context;
   assert.equal(lastContext.selection.endHeading, null);
 
   const nestedDataDir = path.join(root, "nested-chapter-data");
@@ -253,7 +292,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
     "--screenshots", path.join(root, "screenshot.jpg"), "--mineru-base-url", ocr,
   ], "", env);
   assert.equal(nestedChapter.code, 0, nestedChapter.stderr);
-  const nestedContext = JSON.parse(await readFile(path.join(nestedDataDir, "digital-design", "context.json"), "utf8"));
+  const nestedContext = JSON.parse(await readFile(path.join(nestedDataDir, "digital-design", "draft.json"), "utf8")).context;
   assert.equal(nestedContext.selection.title, "Detail");
   assert.equal(nestedContext.selection.startPage, 2);
   assert.equal(nestedContext.selection.endHeading, "Chapter Two");

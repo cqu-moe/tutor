@@ -4,9 +4,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { promptWithMemory } from "./memory.ts";
 import { selectionScope } from "./selection.ts";
 import { createTutorSession, imageContent } from "./runtime.ts";
-import type { Context } from "./types.ts";
-
-const routeChange = /\b(?:remove|delete|skip|reorder|add)\b.{0,60}\b(?:section|topic|coverage|order|scope)\b|\b(?:scope|order|coverage)\b.{0,60}\b(?:change|changed|narrow|expand|reorder)\b|(?:删除|去掉|跳过|增加|新增).{0,20}(?:章节|小节|主题|范围)|(?:调整|改变|修改).{0,20}(?:顺序|范围|覆盖)/i;
+import type { Lecture } from "./lecture-state.ts";
 
 async function persistedSession(courseDir: string) {
   const sessionDir = path.join(courseDir, ".sessions");
@@ -61,16 +59,13 @@ function preservesOriginal(original: string, revised: string) {
 }
 
 export async function reviseLecture(
-  context: Context,
+  { context, route }: Lecture,
   courseDir: string,
   agentDir: string | undefined,
   model: string | undefined,
   feedback: string,
 ) {
   if (!feedback.trim()) throw new Error("--revise requires learning feedback");
-  if (routeChange.test(feedback)) {
-    throw new Error("This revision changes the teaching route scope or order; confirm a new teaching route first");
-  }
   if (!context.confirmedAt || !Number.isFinite(Date.parse(context.confirmedAt))) {
     throw new Error("Confirm the teaching route before revising the lecture");
   }
@@ -96,6 +91,7 @@ export async function reviseLecture(
       sessionManager: await persistedSession(courseDir),
       systemPrompt: "Revise an existing lecture with the smallest precise edit. Do not rewrite untouched sections, headings, media references, citations, or formula conditions. Never infer learning progress from a revision.",
       tools: ["read", "edit", "grep", "find"],
+      writeRoot: stage,
     });
     let toolFailed = false;
     session.subscribe((event) => {
@@ -112,7 +108,7 @@ export async function reviseLecture(
       ...context.screenshots.map((screenshot) => `Screenshot ${screenshot.name}\n${screenshot.markdown}`),
     ].join("\n\n");
     console.log("Revising lecture with targeted edits...");
-    await promptWithMemory(session, `Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n${selectionScope(context.selection)}\nConfirmed route:\n${await readFile(path.join(courseDir, "route.md"), "utf8")}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, { images });
+    await promptWithMemory(session, `Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n${selectionScope(context.selection)}\nConfirmed route:\n${route}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, { images });
     const revised = await readFile(source, "utf8");
     if (toolFailed || revised === original) {
       throw new Error(toolFailed ? "the revision tool failed" : "the model did not change the staged lecture");

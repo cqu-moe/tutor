@@ -1,17 +1,17 @@
+import { constants } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createTutorSession, imageContent } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
 import { selectionScope } from "./selection.ts";
-import type { Context } from "./types.ts";
+import type { Lecture } from "./lecture-state.ts";
 
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".svg"]);
 
-export async function generateLecture(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined) {
+export async function generateLecture({ context, route }: Lecture, courseDir: string, agentDir: string | undefined, model: string | undefined) {
   if (!context.confirmedAt || !Number.isFinite(Date.parse(context.confirmedAt))) {
     throw new Error("Confirm the teaching route before generating the lecture");
   }
-  const route = await readFile(path.join(courseDir, "route.md"), "utf8");
   if (!route.trim()) throw new Error("Confirm a nonempty teaching route before generating the lecture");
   const skillPath = process.env.TUTOR_STUDY_NOTES ?? (process.env.TUTOR_RECTO_ROOT
     ? path.resolve(process.env.TUTOR_RECTO_ROOT, "../study-notes/SKILL.md") : undefined);
@@ -39,6 +39,7 @@ export async function generateLecture(context: Context, courseDir: string, agent
   const session = await createTutorSession(courseDir, agentDir, model, {
     systemPrompt: `${instructions}\n\nTutor task: Write an independently readable lecture, not a summary. Default to Chinese; retain English key course terms on first use. Explicit user adjustments in the confirmed route override defaults. Cover all distinct concepts, formula conditions and methods in ALL selected sources even if the route headings omit details, unless the user explicitly narrowed the scope. Use the final confirmed route for order. Add prerequisites, reasons, key derivation steps and representative worked examples. Cite original pages for formulas, problems and figures; label new examples and prerequisites as additions. Include a compact source-to-section coverage note and unresolved recognition doubts. Verify formulas/tables/figures against original images. Never use whole-page screenshots as lecture illustrations; inspect extracted figures before using them. Return semantic Markdown only, with local media paths and LaTeX inline/display math. Raw markup outside math (HTML/TeX/Typst blocks or commands) is forbidden in the final answer. Use write and bash only in the supplied lecture stage to create and inspect static diagram sources/assets; Tutor handles content staging and Recto conversion. Use Typst native tables for truth/comparison tables. When selected material contains a Boolean-function gate implementation, redraw the actual gate circuit with Schemdraw instead of substituting only an OCR crop, and add a CeTZ-annotated view when it clarifies the structure. Generate SVGs into the stage media directory, reference every generated SVG in the final answer, render a PNG preview with Typst, read that preview and the relevant original page, then correct overlaps, clipping, labels or connections before answering. Cite redrawn figures and label additions. Never print or copy credentials. Do not infer learning progress from generating a lecture.`,
     tools: ["read", "grep", "find", "write", "bash"],
+    writeRoot: stage,
   });
   try {
     const images = await Promise.all([
@@ -55,7 +56,10 @@ export async function generateLecture(context: Context, courseDir: string, agent
       const last = session.messages.at(-1);
       const draft = markdown || (last?.role === "assistant"
         ? last.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim() : "");
-      if (draft) await writeFile(source, `${draft}\n`);
+      // Model commands can create symlinks; the host must not follow one on save.
+      if (draft) await writeFile(source, `${draft}\n`, {
+        flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+      });
     }
     if (!markdown) throw new Error("No complete lecture (empty final answer)");
     return source;

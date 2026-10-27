@@ -14,6 +14,7 @@ import { createTerminalInput, proposeRoute } from "./model.ts";
 import { createTutorSession } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
 import { reviseLecture } from "./revision.ts";
+import { readDraft, readPublishedLecture, saveDraft, type Lecture } from "./lecture-state.ts";
 import type { ChapterSelection, Context, Input } from "./types.ts";
 
 const execute = promisify(execFile);
@@ -133,7 +134,14 @@ async function claimCourseDirectory(course: string, courseDir: string) {
   await mkdir(courseDir, { recursive: true });
   let owner: string | undefined;
   try {
-    owner = normalizedText(JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8")).course ?? "");
+    let context: Context;
+    try {
+      context = JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8")).context;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+    }
+    owner = normalizedText(context.course ?? "");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -216,7 +224,6 @@ async function buildContext(course: string, inputs: Input[], courseDir: string, 
       context.screenshots.push({ name: input.name, source: input.uploadPath, parsedDirectory, markdown });
     }
   }
-  await writeFile(path.join(courseDir, "context.json"), JSON.stringify(context, null, 2));
   return context;
 }
 
@@ -296,8 +303,7 @@ async function main() {
       throw new Error("--revise uses the saved confirmed lecture; omit import, --generate, and --memory options");
     }
     await claimCourseDirectory(course, courseDir);
-    const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
-    await deliverRevision(context, courseDir, values["agent-dir"], values.model, values.revise);
+    await deliverRevision(courseDir, values["agent-dir"], values.model, values.revise);
     return;
   }
   if (values.memory !== undefined) {
@@ -314,8 +320,7 @@ async function main() {
   if (values.generate) {
     if (values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
     await claimCourseDirectory(course, courseDir);
-    const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
-    await deliverLecture(context, courseDir, values["agent-dir"], values.model);
+    await deliverLecture(await readDraft(courseDir), courseDir, values["agent-dir"], values.model);
     return;
   }
   if (!values.pdf) throw new Error("--pdf is required");
@@ -334,6 +339,7 @@ async function main() {
   const chapter = values.chapter ? await selectChapter(values.chapter, pdf, pageCount) : undefined;
   const pages = chapter ? chapter.pages : parsePages(values.pages, pageCount);
   await claimCourseDirectory(course, courseDir);
+  await readPublishedLecture(courseDir);
   const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
   const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");
   const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
@@ -356,17 +362,19 @@ async function main() {
     }
   }
   const context = await buildContext(course, inputs, courseDir, chapter?.selection);
+  const lecture: Lecture = { context, route: "" };
+  await saveDraft(courseDir, lecture);
   const input = createTerminalInput();
   try {
-    await proposeRoute(context, courseDir, values["agent-dir"], values.model, input);
+    await proposeRoute(lecture, courseDir, values["agent-dir"], values.model, input);
     if (!context.confirmedAt) return;
-    await deliverLecture(context, courseDir, values["agent-dir"], values.model);
+    await deliverLecture(lecture, courseDir, values["agent-dir"], values.model);
     process.stdout.write("\nType revision feedback, or type 'done' to finish.\n> ");
     for (;;) {
       const line = await input.nextLine();
       if (line === undefined || line.trim().toLowerCase() === "done") break;
       if (!line.trim()) continue;
-      await deliverRevision(context, courseDir, values["agent-dir"], values.model, line);
+      await deliverRevision(courseDir, values["agent-dir"], values.model, line);
       process.stdout.write("\nType revision feedback, or type 'done' to finish.\n> ");
     }
   } finally {
@@ -374,18 +382,20 @@ async function main() {
   }
 }
 
-async function deliverLecture(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined) {
-  const source = await generateLecture(context, courseDir, agentDir, model);
-  const output = await exportLecture(courseDir, source);
+async function deliverLecture(lecture: Lecture, courseDir: string, agentDir: string | undefined, model: string | undefined) {
+  const source = await generateLecture(lecture, courseDir, agentDir, model);
+  const output = await exportLecture(courseDir, source, lecture);
   await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
     console.warn(`Export succeeded; generation draft remains at ${source}`);
   });
   console.log(`Lecture exported: ${output} (content.md, typst/document.typ, document.pdf, media/)`);
 }
 
-async function deliverRevision(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined, feedback: string) {
-  const source = await reviseLecture(context, courseDir, agentDir, model, feedback);
-  const output = await exportLecture(courseDir, source);
+async function deliverRevision(courseDir: string, agentDir: string | undefined, model: string | undefined, feedback: string) {
+  const lecture = await readPublishedLecture(courseDir);
+  if (!lecture) throw new Error("Generate and export a lecture before revising it");
+  const source = await reviseLecture(lecture, courseDir, agentDir, model, feedback);
+  const output = await exportLecture(courseDir, source, lecture);
   await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
     console.warn(`Revision exported; draft remains at ${source}`);
   });

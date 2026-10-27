@@ -8,6 +8,8 @@ CLI 已可从真实课程 PDF 生成可重建的讲解稿。安装依赖后，�
 
 首次运行前先完成配置：
 
+使用 Node 22.12+；Agent 写入工具需要 macOS 或 Linux 的系统沙箱，依赖见[静态图表](docs/diagrams.md)。
+
 1. 按[模型配置](docs/models.md)准备一个支持文字和图片的 Pi 模型；不使用默认模型或默认 Pi 配置时，按文档在首次命令中提供 `--agent-dir` 与/或 `--model`。
 2. 将本次选用的 OCR 凭据放入仓库已忽略的 `.env.local`：Mistral 使用 `MISTRAL_API_KEY`，MinerU 使用 `MINERU_API_TOKEN`。
 3. 按[讲解导出](docs/export.md)设置 `TUTOR_RECTO_ROOT`、`TUTOR_PYTHON`、`TUTOR_DIAGRAM_PYTHON` 与 `TUTOR_TYPST_PACKAGE_CACHE`，并按 [静态图表](docs/diagrams.md) 准备本地图表环境；首次导入前先运行 Recto 的依赖检查。

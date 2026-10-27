@@ -1,10 +1,8 @@
-import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import path from "node:path";
 import { createTutorSession, imageContent } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
 import { selectionScope } from "./selection.ts";
-import type { Context } from "./types.ts";
+import { saveDraft, type Lecture } from "./lecture-state.ts";
 
 export function createTerminalInput() {
   const lines = createInterface({ input: process.stdin, output: process.stdout });
@@ -29,12 +27,13 @@ export function createTerminalInput() {
 }
 
 export async function proposeRoute(
-  context: Context,
+  lecture: Lecture,
   courseDir: string,
   agentDir: string | undefined,
   model: string | undefined,
   input = createTerminalInput(),
 ) {
+  const { context } = lecture;
   const session = await createTutorSession(courseDir, agentDir, model, {
     systemPrompt: "You are a careful course tutor. Ground claims in supplied course material and cite original pages.",
     tools: ["read"],
@@ -58,20 +57,20 @@ export async function proposeRoute(
     if (!output.trim()) {
       throw new Error("Pi route generation failed: the model returned no route");
     }
+    lecture.route = output.trim();
+    await saveDraft(courseDir, lecture);
 
     process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
     for (;;) {
       const line = await input.nextLine();
       if (line === undefined) {
-        await writeFile(path.join(courseDir, "route-draft.md"), `${output.trim()}\n`);
         process.stdout.write("\nRoute was not confirmed; the proposed route remains saved locally.\n");
         return;
       }
       if (line.trim().toLowerCase() === "confirm") {
         context.confirmedAt = new Date().toISOString();
         confirmed = true;
-        await writeFile(path.join(courseDir, "context.json"), JSON.stringify(context, null, 2));
-        await writeFile(path.join(courseDir, "route.md"), `${output.trim()}\n`);
+        await saveDraft(courseDir, lecture);
         process.stdout.write("Teaching route confirmed.\n");
         return;
       }
@@ -84,6 +83,8 @@ export async function proposeRoute(
       if (!output.trim()) {
         throw new Error("Pi route adjustment failed: the model returned no revised route");
       }
+      lecture.route = output.trim();
+      await saveDraft(courseDir, lecture);
       process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
     }
   } finally {

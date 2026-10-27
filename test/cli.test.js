@@ -161,7 +161,7 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
     assert.match(stdout, /Route was not confirmed/);
     assert.match(stdout, /Type an adjustment, or type 'confirm'/);
 
-    const context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
+    const context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     assert.equal(context.course, "Digital Design");
     assert.equal(context.pages[0].sourcePage, 1);
     await assert.rejects(() => readFile(path.join(dataDir, "digital-design", "output", "content.md")));
@@ -180,7 +180,7 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
       NO_COLOR: "1",
     });
     assert.match(unconfirmed, /Route was not confirmed/);
-    await readFile(path.join(dataDir, "digital-design", "route-draft.md"));
+    assert.match(JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).route, /Proposed route/);
   } finally {
     await new Promise((resolve) => mineru.close(resolve));
     await new Promise((resolve) => model.close(resolve));

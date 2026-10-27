@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -115,6 +115,7 @@ test("CLI revises delivered lectures across processes while preserving usable ou
     ["Break export", { oldText: "Added derivation: AND gives 1 only for x=1 and y=1.", newText: "Added derivation: AND gives 1 only for x=1 and y=1.\n\n<div>Unsupported revision markup</div>" }],
   ]);
   let mode = "success";
+  let editTarget;
   const requests = [];
   const model = await serve(t, async (request, response) => {
     const payload = await body(request);
@@ -128,7 +129,7 @@ test("CLI revises delivered lectures across processes while preserving usable ou
     const { oldText, newText } = replacements.get(feedback);
     return sse(response, {
       content: "I will make the targeted edit.",
-      tool_calls: [{ index: 0, id: "edit-source", type: "function", function: { name: "edit", arguments: JSON.stringify({ path: source, edits: [{ oldText, newText }] }) } }],
+      tool_calls: [{ index: 0, id: "edit-source", type: "function", function: { name: "edit", arguments: JSON.stringify({ path: editTarget?.(source) ?? source, edits: [{ oldText, newText }] }) } }],
     }, "tool_calls");
   });
 
@@ -143,10 +144,12 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   delete env.MINERU_API_TOKEN;
   delete env.MISTRAL_API_KEY;
 
-  const scoped = await runCli([...common, "--revise", "Remove the OR section and put examples first"], env);
+  const scopeFeedback = "Remove the OR section and put examples first";
+  replacements.set(scopeFeedback, { oldText: "## OR gates", newText: "" });
+  const scoped = await runCli([...common, "--revise", scopeFeedback], env);
   assert.equal(scoped.code, 1);
   assert.match(scoped.stderr, /teaching route.*confirm/i);
-  assert.equal(requests.length, 0, "scope changes must not reach the revision model");
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), lecture);
 
   await writeFile(path.join(courseDir, "revision-session.json"), JSON.stringify({ sessionFile: "../escaped.jsonl" }));
   const unsafeSession = await runCli([...common, "--revise", "Rewrite the Boolean functions section"], env);
@@ -154,7 +157,22 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   assert.match(unsafeSession.stderr, /stay inside \.sessions/);
   await rm(path.join(courseDir, "revision-session.json"));
 
-  const adjacentFeedback = "Re-explain the AND output";
+  await symlink(path.join(output, "content.md"), path.join(output, "media", "outside.md"));
+  for (const target of [
+    () => path.join(output, "content.md"),
+    (source) => `${path.dirname(source)}/../output/content.md`,
+    (source) => `${path.dirname(source)}/media/outside.md`,
+  ]) {
+    editTarget = target;
+    const outside = await runCli([...common, "--revise", "Rewrite the Boolean functions section"], env);
+    assert.equal(outside.code, 1);
+    assert.equal(await readFile(path.join(output, "content.md"), "utf8"), lecture, "A rejected edit must never change the published lecture");
+    assert.match(outside.stderr, /revision tool failed/);
+  }
+  editTarget = undefined;
+  await rm(path.join(output, "media", "outside.md"));
+
+  const adjacentFeedback = "不要修改顺序，只补充推导";
   replacements.set(adjacentFeedback, {
     oldText: "与门在两个输入均为 1 时输出 1。",
     newText: "只有两个输入都为 1，AND 门的输出才为 1。",
@@ -179,6 +197,7 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   assert.equal(await readFile(path.join(output, "content.md"), "utf8"), afterAdjacentEdit);
 
   for (const feedback of replacements.keys()) {
+    if (feedback === scopeFeedback) continue;
     if (feedback === "Break export") continue;
     if (feedback === adjacentFeedback) continue;
     if (feedback === citationFeedback) continue;

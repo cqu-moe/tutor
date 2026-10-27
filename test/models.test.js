@@ -276,7 +276,7 @@ test("model failures are actionable, redacted, and preserve course work", { time
           return true;
         },
       );
-      await readFile(path.join(dataDir, "digital-design", "context.json"));
+      await readFile(path.join(dataDir, "digital-design", "draft.json"));
     }
     assert.deepEqual(modelRequests.map((request) => request.model), ["failing-model"]);
   } finally {
