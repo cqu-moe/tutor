@@ -45,10 +45,14 @@ export async function prepareMemory(courseDir: string) {
 
 export async function promptWithMemory(session: AgentSession, prompt: string, options?: Parameters<AgentSession["prompt"]>[1]) {
   let failure: string | undefined;
+  const recoveryIds: string[] = [];
   const unsubscribe = session.subscribe((event) => {
-    if (event.type === "tool_execution_end" && memoryTools.includes(event.toolName)
-      && (event.isError || event.result?.isError)) {
-      failure = event.toolName;
+    if (event.type === "tool_execution_end" && memoryTools.includes(event.toolName)) {
+      if (event.isError || event.result?.isError) {
+        failure = event.toolName;
+      } else if (event.toolName === "memory_forget" && typeof event.result?.details?.recoveryId === "string") {
+        recoveryIds.push(event.result.details.recoveryId);
+      }
     }
   });
   try {
@@ -57,7 +61,11 @@ export async function promptWithMemory(session: AgentSession, prompt: string, op
     if (session.agent.state.errorMessage) throw new Error(`Pi response failed: ${session.agent.state.errorMessage}`);
     const last = session.messages.at(-1);
     if (last?.role !== "assistant") throw new Error("Pi response failed: no final answer");
+    if (last.stopReason !== "stop") throw new Error(`Pi response failed: incomplete answer (${last.stopReason})`);
     return last.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+  } catch (error) {
+    if (!recoveryIds.length) throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${recoveryIds.map((id) => `Recovery ID: ${id}`).join("\n")}\nUse --memory \"Restore deletion <Recovery ID>\" to recover the forgotten entry.`);
   } finally {
     unsubscribe();
   }

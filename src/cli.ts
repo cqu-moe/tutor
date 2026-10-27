@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { promisify } from "node:util";
+import { hashFile, readOcrResult, uncachedInputs, type OcrProvider } from "./ocr.ts";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseWithMinerU } from "./mineru.ts";
+import { parseWithMistral } from "./mistral.ts";
 import { proposeRoute } from "./model.ts";
 import { createTutorSession } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
@@ -68,38 +70,54 @@ async function prepareMaterials(pdf: string, pages: number[], screenshots: strin
   await mkdir(path.join(courseDir, "original-pages"), { recursive: true });
   await mkdir(path.join(courseDir, "parsed"), { recursive: true });
   await mkdir(path.join(courseDir, "source"), { recursive: true });
-  await copyFile(pdf, path.join(courseDir, "source", path.basename(pdf)));
+  const sourceHash = await hashFile(pdf);
+  const sourceCopy = path.join(courseDir, "source", `${path.parse(pdf).name}-${sourceHash}.pdf`);
+  try {
+    await readFile(sourceCopy);
+  } catch {
+    await copyFile(pdf, sourceCopy);
+  }
 
   const inputs: Input[] = [];
   for (const page of pages) {
     const stem = `page-${String(page).padStart(4, "0")}`;
-    const pagePdf = path.join(courseDir, "original-pages", `${stem}.pdf`);
-    await command("pdfseparate", ["-f", String(page), "-l", String(page), pdf, pagePdf]);
-    await command("pdftoppm", ["-png", "-r", "150", "-singlefile", pagePdf, path.join(courseDir, "original-pages", stem)]);
-    inputs.push({ name: `${stem}.pdf`, uploadPath: pagePdf, kind: "pdf-page", sourcePage: page, image: `${stem}.png` });
+    const contentHash = sourceHash;
+    const name = `${stem}-${contentHash}.pdf`;
+    const pagePdf = path.join(courseDir, "original-pages", name);
+    const image = `${stem}-${contentHash}.png`;
+    try {
+      await access(pagePdf);
+      await access(path.join(courseDir, "original-pages", image));
+    } catch {
+      const temporary = path.join(courseDir, "original-pages", `${stem}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      await command("pdfseparate", ["-f", String(page), "-l", String(page), sourceCopy, `${temporary}.pdf`]);
+      await command("pdftoppm", ["-png", "-r", "150", "-singlefile", `${temporary}.pdf`, temporary]);
+      await rename(`${temporary}.pdf`, pagePdf);
+      await rename(`${temporary}.png`, path.join(courseDir, "original-pages", image));
+    }
+    const input: Input = { name: `${stem}.pdf`, uploadPath: pagePdf, kind: "pdf-page", sourcePage: page, image, contentHash };
+    inputs.push(input);
   }
 
   for (const screenshot of screenshots) {
-    const name = `${path.parse(screenshot).name}-${Date.now()}${path.extname(screenshot)}`;
-    const copied = path.join(courseDir, "source", name);
-    await copyFile(screenshot, copied);
-    inputs.push({ name, uploadPath: copied, kind: "screenshot" });
+    const contentHash = await hashFile(screenshot);
+    const name = path.basename(screenshot);
+    const copied = path.join(courseDir, "source", `screenshot-${contentHash}${path.extname(screenshot)}`);
+    try {
+      await readFile(copied);
+    } catch {
+      await copyFile(screenshot, copied);
+    }
+    const input: Input = { name, uploadPath: copied, kind: "screenshot", contentHash };
+    inputs.push(input);
   }
   return inputs;
-}
-
-async function readMarkdown(root: string) {
-  const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  const file = entries.find((entry) => entry.isFile() && entry.name === "full.md");
-  if (!file) throw new Error("MinerU result did not contain full.md");
-  return readFile(path.join(file.parentPath, file.name), "utf8");
 }
 
 async function buildContext(course: string, inputs: Input[], courseDir: string): Promise<Context> {
   const context: Context = { course, pages: [], screenshots: [], confirmedAt: null };
   for (const input of inputs) {
-    const parsedDirectory = path.join(courseDir, "parsed", path.parse(input.name).name);
-    const markdown = await readMarkdown(parsedDirectory);
+    const { markdown, parsedDirectory } = await readOcrResult(input.parsedDirectory!);
     if (input.kind === "pdf-page") {
       context.pages.push({
         sourcePage: input.sourcePage!,
@@ -175,7 +193,9 @@ async function main() {
       "agent-dir": { type: "string" },
       model: { type: "string" },
       memory: { type: "string" },
+      ocr: { type: "string", default: "mineru" },
       "mineru-base-url": { type: "string", default: "https://mineru.net" },
+      "mistral-base-url": { type: "string", default: "https://api.mistral.ai" },
     },
   });
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
@@ -195,6 +215,8 @@ async function main() {
   if (!values.pdf) throw new Error("--pdf is required");
   if (!values.pages) throw new Error("--pages is required");
   const pages = parsePages(values.pages);
+  const provider = values.ocr as OcrProvider;
+  if (provider !== "mineru" && provider !== "mistral") throw new Error("--ocr must be mineru or mistral");
   if (pages.length > 50) throw new Error("Select at most 50 pages per teaching task");
 
   const pdf = path.resolve(values.pdf);
@@ -203,11 +225,27 @@ async function main() {
   for (const screenshot of screenshots) {
     if (!imageExtensions.has(path.extname(screenshot).toLowerCase())) throw new Error(`Unsupported screenshot type: ${path.basename(screenshot)}`);
   }
-  const token = process.env.MINERU_API_TOKEN;
-  if (!token) throw new Error("MINERU_API_TOKEN is required. MinerU's precision API uses a Bearer token.");
-
+  const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
+  const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");
   const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
-  await parseWithMinerU(inputs, values["mineru-base-url"]!.replace(/\/$/, ""), token, courseDir);
+  const pending = await uncachedInputs(
+    inputs,
+    courseDir,
+    provider,
+    provider === "mineru" ? "vlm" : "mistral-ocr-latest",
+    provider === "mineru" ? mineruBaseUrl : mistralBaseUrl,
+  );
+  if (pending.length) {
+    if (provider === "mineru") {
+      const token = process.env.MINERU_API_TOKEN;
+      if (!token) throw new Error("MINERU_API_TOKEN is required. MinerU's precision API uses a Bearer token.");
+      await parseWithMinerU(pending, mineruBaseUrl, token);
+    } else {
+      const apiKey = process.env.MISTRAL_API_KEY;
+      if (!apiKey) throw new Error("MISTRAL_API_KEY is required for Mistral OCR.");
+      await parseWithMistral(pending, mistralBaseUrl, apiKey);
+    }
+  }
   const context = await buildContext(values.course, inputs, courseDir);
   await proposeRoute(context, courseDir, values["agent-dir"], values.model);
 }

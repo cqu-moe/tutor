@@ -66,9 +66,10 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   await run("/usr/bin/zip", ["-q", "-j", path.join(root, "result.zip"), path.join(root, "full.md")]);
   const zip = await readFile(path.join(root, "result.zip"));
   let uploads = 0;
+  let ocrFileName;
   const ocr = createServer(async (request, response) => {
     if (request.method === "POST") {
-      await body(request);
+      ocrFileName = (await body(request)).files[0].name;
       uploads++;
       response.end(JSON.stringify({ code: 0, data: { batch_id: "batch", file_urls: [`${ocrUrl}/upload`] } }));
     } else if (request.method === "PUT") {
@@ -76,7 +77,7 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
     } else if (request.url === "/result.zip") {
       response.end(zip);
     } else {
-      response.end(JSON.stringify({ code: 0, data: { extract_result: [{ file_name: "page-0001.pdf", state: "done", full_zip_url: `${ocrUrl}/result.zip` }] } }));
+      response.end(JSON.stringify({ code: 0, data: { extract_result: [{ file_name: ocrFileName, state: "done", full_zip_url: `${ocrUrl}/result.zip` }] } }));
     }
   });
   const ocrUrl = await listen(ocr);
@@ -171,9 +172,41 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   await chmod(store, 0o600);
   assert.equal(await memory("Digital Design", "Show memory"), restored, "Failed write must preserve previous memory");
 
+  for (const finish of ["length", "content_filter"]) {
+    steps = [(_payload, response) => sse(response, { content: "Partial answer must not be reported as complete" }, finish)];
+    const incomplete = await runCli([...args("Digital Design"), "--memory", "Show memory"], "", env);
+    assert.equal(incomplete.code, 1, `Incomplete ${finish} response must fail`);
+    assert.match(incomplete.stderr, /Pi response failed/);
+    assert.doesNotMatch(incomplete.stdout, /Partial answer/);
+  }
+
   steps = [call("memory_restore", { recoveryId: "invalid-id" }), say("Restored successfully")];
   const invalidRestore = await runCli([...args("Digital Design"), "--memory", "Restore invalid-id"], "", env);
   assert.equal(invalidRestore.code, 1);
   assert.match(invalidRestore.stderr, /memory operation failed.*memory_restore/);
   assert.doesNotMatch(invalidRestore.stdout, /Restored successfully/);
+
+  steps = [
+    call("memory_forget", { match: correctedProgress }),
+    async (payload, response) => {
+      await chmod(store, 0o400);
+      write(progress)(payload, response);
+    },
+    say("Corrected successfully"),
+  ];
+  let failedCorrection;
+  try {
+    failedCorrection = await runCli([...args("Digital Design"), "--memory", "Correct my progress: Boolean basics are now learned"], "", env);
+  } finally {
+    await chmod(store, 0o600);
+  }
+  assert.equal(failedCorrection.code, 1);
+  assert.match(failedCorrection.stderr, /memory operation failed.*memory_write/);
+  assert.doesNotMatch(failedCorrection.stdout, /Corrected successfully/);
+  const correctionRecoveryId = failedCorrection.stderr.match(/Recovery ID: ([0-9a-f-]+)/i)?.[1];
+  assert.ok(correctionRecoveryId, "Failed replacement must expose the successful deletion's recovery ID");
+  await memory("Digital Design", `Restore deletion ${correctionRecoveryId}`, [call("memory_restore", { recoveryId: correctionRecoveryId }), echo]);
+  const recoveredCorrection = await memory("Digital Design", "Show current learner memory");
+  assert.ok(recoveredCorrection.includes(correctedProgress) && !recoveredCorrection.includes(progress));
+  assert.ok(recoveredCorrection.includes(otherProgress) && recoveredCorrection.includes(preference));
 });
