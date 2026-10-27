@@ -45,6 +45,7 @@ node --env-file=.env.local bin/tutor.js \
 - [模型配置](docs/models.md)
 - [OCR 配置与缓存](docs/ocr.md)
 - [讲解导出](docs/export.md)
+- [静态图表](docs/diagrams.md)
 - [局部修订](docs/revision.md)
 - [学习者记忆](docs/memory.md)
 - [真实课程验收](docs/acceptance.md)
