@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -75,6 +75,11 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
   await run("/usr/bin/zip", ["-q", "-j", zip, path.join(parsed, "full.md"), path.join(parsed, "layout.json"), path.join(parsed, "figure.png")]);
   const zipBytes = await readFile(zip);
   const unsafeZip = Buffer.from(zipBytes.toString("latin1").replaceAll("full.md", "../x.md"), "latin1");
+  const invalidResult = path.join(root, "invalid-result");
+  await mkdir(invalidResult);
+  await writeFile(path.join(invalidResult, "layout.json"), "{}\n");
+  await run("/usr/bin/zip", ["-q", "-j", path.join(root, "invalid-result.zip"), path.join(invalidResult, "layout.json")]);
+  const invalidResultZip = await readFile(path.join(root, "invalid-result.zip"));
   await symlink(root, path.join(parsed, "link"));
   await run("/usr/bin/zip", ["-q", "-y", path.join(root, "symlink.zip"), "link"], { cwd: parsed });
   const linkZip = await readFile(path.join(root, "symlink.zip"));
@@ -127,7 +132,12 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     }
     if (request.method === "GET" && request.url === "/result.zip") {
       if (mineruMode === "oversize") response.setHeader("content-length", String(513 * 1024 * 1024));
-      response.end(mineruMode === "unsafe" ? unsafeZip : mineruMode === "symlink" ? linkZip : zipBytes);
+      response.end(
+        mineruMode === "unsafe" ? unsafeZip
+          : mineruMode === "symlink" ? linkZip
+          : mineruMode === "invalid-result" ? invalidResultZip
+          : zipBytes,
+      );
       return;
     }
     response.statusCode = 404;
@@ -190,6 +200,8 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
   try {
     await runCli(cli, [...common, "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`], "confirm\n", env);
     let context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
+    const savedMineruFiles = await readdir(path.join(dataDir, "digital-design", "parsed", "mineru"), { recursive: true });
+    assert.ok(!savedMineruFiles.some((file) => file.endsWith(".zip")));
     assert.equal(context.pages[0].sourcePage, 1);
     assert.match(context.pages[0].markdown, /F = xy \+ x'z/);
     await readFile(path.join(context.pages[0].parsedDirectory, "figure.png"));
@@ -264,6 +276,12 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     mineruMode = "unsafe";
     const mineruArgs = [...common, "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`];
     await assert.rejects(() => runCli(cli, [...mineruArgs, "--course", "Unsafe archive"], "", env), /archive contains an unsafe path/);
+    let failedFiles = await readdir(path.join(dataDir, "unsafe-archive", "parsed", "mineru"), { recursive: true });
+    assert.deepEqual(failedFiles.filter((file) => file.endsWith(".zip")).length, 1);
+    mineruMode = "invalid-result";
+    await assert.rejects(() => runCli(cli, [...mineruArgs, "--course", "Invalid MinerU result"], "", env), /OCR result must contain one full\.md/);
+    failedFiles = await readdir(path.join(dataDir, "invalid-mineru-result", "parsed", "mineru"), { recursive: true });
+    assert.deepEqual(failedFiles.filter((file) => file.endsWith(".zip")).length, 1);
     for (const [mode, expected] of [["symlink", /symbolic link/], ["oversize", /HTTP 200.*exceeds/], ["upload-fails", /HTTP 403.*SignatureDoesNotMatch/]]) {
       mineruMode = mode;
       await assert.rejects(() => runCli(cli, [...mineruArgs, "--course", `MinerU ${mode}`], "", env), (error) => {

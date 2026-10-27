@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { createOutput, request, safeReason, safeRelativePath, saveCache } from "./ocr.ts";
@@ -99,6 +99,7 @@ export async function parseWithMinerU(inputs: Input[], baseUrl: string, token: s
         await writeFile(zip, bytes);
         await safeUnzip(zip, output);
         await saveCache(input, "mineru", "vlm", baseUrl, output);
+        await rm(zip, { force: true }).catch(() => {});
       } catch (error) {
         failures.push((error as Error).message);
       }
