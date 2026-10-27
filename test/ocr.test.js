@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -75,9 +75,11 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
   await run("/usr/bin/zip", ["-q", "-j", zip, path.join(parsed, "full.md"), path.join(parsed, "layout.json"), path.join(parsed, "figure.png")]);
   const zipBytes = await readFile(zip);
   const unsafeZip = Buffer.from(zipBytes.toString("latin1").replaceAll("full.md", "../x.md"), "latin1");
+  await symlink(root, path.join(parsed, "link"));
+  await run("/usr/bin/zip", ["-q", "-y", path.join(root, "symlink.zip"), "link"], { cwd: parsed });
+  const linkZip = await readFile(path.join(root, "symlink.zip"));
 
   let mineruTasks = 0;
-  let mineruFileName = "page-0001.pdf";
   let mineruRejects = false;
   let mineruFiles = [];
   let mineruMode = "normal";
@@ -90,7 +92,6 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
       }
       mineruTasks += 1;
       const payload = JSON.parse(await body(request));
-      mineruFileName = payload.files[0].name;
       mineruFiles = payload.files;
       response.end(JSON.stringify({
         code: 0,
@@ -106,6 +107,11 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
       assert.equal(request.headers.authorization, undefined);
       assert.equal(request.headers["content-type"], undefined);
       request.resume();
+      if (mineruMode === "upload-fails") {
+        response.statusCode = 403;
+        response.end("<Error><Code>SignatureDoesNotMatch</Code><Message>test-only-mineru https://upload.example?Signature=private-signature</Message></Error>");
+        return;
+      }
       response.end();
       return;
     }
@@ -120,7 +126,8 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
       return;
     }
     if (request.method === "GET" && request.url === "/result.zip") {
-      response.end(mineruMode === "unsafe" ? unsafeZip : zipBytes);
+      if (mineruMode === "oversize") response.setHeader("content-length", String(513 * 1024 * 1024));
+      response.end(mineruMode === "unsafe" ? unsafeZip : mineruMode === "symlink" ? linkZip : zipBytes);
       return;
     }
     response.statusCode = 404;
@@ -202,6 +209,8 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     assert.equal(mistralCalls, 1);
 
     const mistralContext = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
+    const oldDelivery = path.join(dataDir, "digital-design", "lecture.md");
+    await writeFile(oldDelivery, "Previous good lecture\n");
     await assert.rejects(
       () => runCli(cli, [
         "--course", "Digital Design",
@@ -223,6 +232,7 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
       mistralContext,
     );
     assert.match(mistralContext.pages[0].markdown, /Boolean Functions/);
+    assert.equal(await readFile(oldDelivery, "utf8"), "Previous good lecture\n");
 
     // The endpoint is part of the selected service identity, even on the same host.
     await assert.rejects(
@@ -254,6 +264,14 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     mineruMode = "unsafe";
     const mineruArgs = [...common, "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`];
     await assert.rejects(() => runCli(cli, [...mineruArgs, "--course", "Unsafe archive"], "", env), /archive contains an unsafe path/);
+    for (const [mode, expected] of [["symlink", /symbolic link/], ["oversize", /HTTP 200.*exceeds/], ["upload-fails", /HTTP 403.*SignatureDoesNotMatch/]]) {
+      mineruMode = mode;
+      await assert.rejects(() => runCli(cli, [...mineruArgs, "--course", `MinerU ${mode}`], "", env), (error) => {
+        assert.match(error.message, expected);
+        assert.doesNotMatch(error.message, /test-only-mineru|private-signature/);
+        return true;
+      });
+    }
 
     mineruMode = "partial";
     await assert.rejects(() => runCli(cli, [...mineruArgs, "--course", "Partial MinerU", "--pages", "1-2"], "", env), /page processing failed/);

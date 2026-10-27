@@ -1,15 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { responseBytes, safeReason, saveCache } from "./ocr.ts";
+import { createOutput, request, safeReason, safeRelativePath, saveCache } from "./ocr.ts";
 import type { Input } from "./types.ts";
 
 const execute = promisify(execFile);
 
 async function command(command: string, args: string[]) {
   try {
-    return await execute(command, args, { maxBuffer: 1024 * 1024 * 32 });
+    return await execute(command, args, { maxBuffer: 1024 * 1024 * 32, timeout: 120_000 });
   } catch (error) {
     const detail = error instanceof Error ? error.message.split("\n")[0] : "unknown error";
     throw new Error(`${path.basename(command)} failed: ${detail}`);
@@ -17,40 +17,34 @@ async function command(command: string, args: string[]) {
 }
 
 async function jsonFetch(url: string, init: RequestInit, stage: string) {
-  let response: Response;
-  try {
-    response = await fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(30_000) });
-  } catch {
-    throw new Error(`MinerU ${stage} request failed`);
-  }
+  const { bytes, status } = await request(url, init, `MinerU ${stage}`, 1024 * 1024, 30_000);
   let payload: any;
   try {
-    payload = JSON.parse((await responseBytes(response, 1024 * 1024)).toString("utf8"));
+    payload = JSON.parse(bytes.toString("utf8"));
   } catch {
-    throw new Error(`MinerU ${stage} returned an invalid response (HTTP ${response.status})`);
+    throw new Error(`MinerU ${stage} returned an invalid response (HTTP ${status})`);
   }
-  if (!response.ok || payload.code !== 0) throw new Error(`MinerU ${stage} failed (HTTP ${response.status}): ${safeReason(payload)}`);
+  if (payload?.code !== 0) throw new Error(`MinerU ${stage} failed (HTTP ${status}): ${safeReason(payload)}`);
   return payload;
 }
 
 async function safeUnzip(zip: string, output: string) {
   const details = await command("/usr/bin/unzip", ["-Zl", zip]);
-  if (details.stdout.split("\n").some((line) => /^\s*l/.test(line))) throw new Error("MinerU result archive contains a symbolic link");
+  const records = details.stdout.split("\n").filter((line) => /^[-dlcbps?]/.test(line));
+  if (records.some((line) => !/^[-d]/.test(line))) throw new Error("MinerU result archive contains a symbolic link or special file");
+  const sizes = records.map((line) => Number(line.trim().split(/\s+/)[3]));
+  if (sizes.some((size) => !Number.isSafeInteger(size)) || sizes.reduce((sum, size) => sum + size, 0) > 512 * 1024 * 1024) {
+    throw new Error("MinerU result archive exceeds the 512 MiB extraction limit");
+  }
   const listing = await command("/usr/bin/unzip", ["-Z1", zip]);
-  for (const entry of listing.stdout.split("\n")) {
-    if (!entry || entry.endsWith("/")) continue;
-    if (path.isAbsolute(entry) || entry.includes("\\") || entry.split("/").includes("..")) {
+  const paths = listing.stdout.trimEnd().split("\n");
+  if (records.length !== paths.length) throw new Error("MinerU result archive has an ambiguous file listing");
+  for (const entry of paths) {
+    if (!safeRelativePath(entry)) {
       throw new Error("MinerU result archive contains an unsafe path");
     }
   }
-  await mkdir(output, { recursive: true });
-  await command("/usr/bin/unzip", ["-q", "-o", zip, "-d", output]);
-}
-
-async function failureReason(response: Response) {
-  const text = (await responseBytes(response, 64 * 1024)).toString("utf8");
-  const xml = text.match(/<Message>([\s\S]*?)<\/Message>/);
-  return safeReason(xml ? xml[1] : text);
+  await command("/usr/bin/unzip", ["-q", "-n", zip, "-d", output]);
 }
 
 export async function parseWithMinerU(inputs: Input[], baseUrl: string, token: string) {
@@ -58,55 +52,57 @@ export async function parseWithMinerU(inputs: Input[], baseUrl: string, token: s
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({
-      files: inputs.map((input) => ({ name: input.name, data_id: input.name })),
+      files: inputs.map((input, index) => ({ name: input.name, data_id: String(index) })),
       model_version: "vlm",
       enable_formula: true,
       enable_table: true,
     }),
   }, "task creation");
 
-  const urls = created.data.file_urls;
-  if (urls?.length !== inputs.length) throw new Error("MinerU did not return one upload URL per file");
+  const urls = created.data?.file_urls;
+  const batchId = created.data?.batch_id;
+  if (!Array.isArray(urls) || urls.length !== inputs.length || typeof batchId !== "string") throw new Error("MinerU did not return one upload URL per file and a batch ID (HTTP 200)");
+  const completed = new Set<number>();
+  const failures: string[] = [];
   for (const [index, input] of inputs.entries()) {
-    let upload: Response;
     try {
-      upload = await fetch(urls[index], { method: "PUT", body: await readFile(input.uploadPath), signal: AbortSignal.timeout(120_000) });
-    } catch {
-      throw new Error(`MinerU upload failed for ${input.name}: request failed or timed out after 120 seconds`);
+      // Signed uploads require an empty Content-Type and no API Authorization header.
+      await request(urls[index], { method: "PUT", body: await readFile(input.uploadPath) }, `MinerU upload for ${input.name}`, 64 * 1024);
+    } catch (error) {
+      completed.add(index);
+      failures.push((error as Error).message);
     }
-    if (!upload.ok) throw new Error(`MinerU upload failed for ${input.name} (HTTP ${upload.status}): ${await failureReason(upload)}`);
   }
 
   const deadline = Date.now() + 10 * 60 * 1000;
-  let results;
-  do {
+  while (completed.size < inputs.length) {
     if (Date.now() > deadline) throw new Error("MinerU parsing timed out after 10 minutes");
     await new Promise((resolve) => setTimeout(resolve, 2_000));
-    const status = await jsonFetch(`${baseUrl}/api/v4/extract-results/batch/${created.data.batch_id}`, {
+    const status = await jsonFetch(`${baseUrl}/api/v4/extract-results/batch/${encodeURIComponent(batchId)}`, {
       headers: { authorization: `Bearer ${token}` },
     }, "status polling");
-    results = status.data.extract_result ?? [];
-  } while (results.length !== inputs.length || results.some((result: any) => ["pending", "waiting-file", "running", "converting"].includes(result.state)));
-
-  for (const input of inputs) {
-    const result = results.find((item: any) => item.file_name === input.name || item.data_id === input.name);
-    if (!result || result.state !== "done" || !result.full_zip_url) {
-      throw new Error(`MinerU parsing failed for ${input.name}: ${safeReason({ message: result?.err_msg })}`);
+    const results = status.data?.extract_result;
+    if (!Array.isArray(results)) throw new Error("MinerU status polling returned an invalid result list (HTTP 200)");
+    for (const [index, input] of inputs.entries()) {
+      if (completed.has(index)) continue;
+      const result = results.find((item: any) => item.data_id === String(index))
+        ?? results.find((item: any) => !item.data_id && item.file_name === input.name);
+      if (!result || ["pending", "waiting-file", "running", "converting"].includes(result.state)) continue;
+      completed.add(index);
+      try {
+        if (result.state !== "done" || !result.full_zip_url) {
+          throw new Error(`MinerU parsing failed for ${input.name} (HTTP 200): ${safeReason({ message: result.err_msg })}`);
+        }
+        const { bytes } = await request(result.full_zip_url, {}, `MinerU result download for ${input.name}`, 512 * 1024 * 1024);
+        const output = await createOutput(input);
+        const zip = `${output}.zip`;
+        await writeFile(zip, bytes);
+        await safeUnzip(zip, output);
+        await saveCache(input, "mineru", "vlm", baseUrl, output);
+      } catch (error) {
+        failures.push((error as Error).message);
+      }
     }
-    let download: Response;
-    try {
-      download = await fetch(result.full_zip_url, { signal: AbortSignal.timeout(120_000) });
-    } catch {
-      throw new Error(`MinerU result download failed for ${input.name}: request failed or timed out after 120 seconds`);
-    }
-    if (!download.ok) throw new Error(`MinerU result download failed for ${input.name} (HTTP ${download.status}): ${await failureReason(download)}`);
-    const output = input.parsedDirectory!;
-    const zip = `${output}.zip`;
-    const partial = `${zip}.download`;
-    await mkdir(output, { recursive: true });
-    await writeFile(partial, await responseBytes(download, 512 * 1024 * 1024));
-    await rename(partial, zip);
-    await safeUnzip(zip, output);
-    await saveCache(input, "mineru", "vlm", baseUrl);
   }
+  if (failures.length) throw new Error(failures.join("\n"));
 }

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { promisify } from "node:util";
-import { hashFile, uncachedInputs, type OcrProvider } from "./ocr.ts";
+import { hashFile, readOcrResult, uncachedInputs, type OcrProvider } from "./ocr.ts";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseWithMinerU } from "./mineru.ts";
 import { parseWithMistral } from "./mistral.ts";
@@ -64,7 +64,7 @@ async function courseDirectory(course: string, dataDir: string) {
   return path.resolve(dataDir, slug);
 }
 
-async function prepareMaterials(pdf: string, pages: number[], screenshots: string[], courseDir: string, provider: OcrProvider) {
+async function prepareMaterials(pdf: string, pages: number[], screenshots: string[], courseDir: string) {
   await mkdir(path.join(courseDir, "original-pages"), { recursive: true });
   await mkdir(path.join(courseDir, "parsed"), { recursive: true });
   await mkdir(path.join(courseDir, "source"), { recursive: true });
@@ -79,23 +79,28 @@ async function prepareMaterials(pdf: string, pages: number[], screenshots: strin
   const inputs: Input[] = [];
   for (const page of pages) {
     const stem = `page-${String(page).padStart(4, "0")}`;
-    const temporary = path.join(courseDir, "original-pages", `${stem}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    await command("pdfseparate", ["-f", String(page), "-l", String(page), pdf, `${temporary}.pdf`]);
-    await command("pdftoppm", ["-png", "-r", "150", "-singlefile", `${temporary}.pdf`, temporary]);
     const contentHash = sourceHash;
     const name = `${stem}-${contentHash}.pdf`;
     const pagePdf = path.join(courseDir, "original-pages", name);
     const image = `${stem}-${contentHash}.png`;
-    await rename(`${temporary}.pdf`, pagePdf);
-    await rename(`${temporary}.png`, path.join(courseDir, "original-pages", image));
-    const input: Input = { name, uploadPath: pagePdf, kind: "pdf-page", sourcePage: page, image, contentHash };
+    try {
+      await access(pagePdf);
+      await access(path.join(courseDir, "original-pages", image));
+    } catch {
+      const temporary = path.join(courseDir, "original-pages", `${stem}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      await command("pdfseparate", ["-f", String(page), "-l", String(page), sourceCopy, `${temporary}.pdf`]);
+      await command("pdftoppm", ["-png", "-r", "150", "-singlefile", `${temporary}.pdf`, temporary]);
+      await rename(`${temporary}.pdf`, pagePdf);
+      await rename(`${temporary}.png`, path.join(courseDir, "original-pages", image));
+    }
+    const input: Input = { name: `${stem}.pdf`, uploadPath: pagePdf, kind: "pdf-page", sourcePage: page, image, contentHash };
     inputs.push(input);
   }
 
   for (const screenshot of screenshots) {
     const contentHash = await hashFile(screenshot);
-    const name = `screenshot-${contentHash}${path.extname(screenshot)}`;
-    const copied = path.join(courseDir, "source", name);
+    const name = path.basename(screenshot);
+    const copied = path.join(courseDir, "source", `screenshot-${contentHash}${path.extname(screenshot)}`);
     try {
       await readFile(copied);
     } catch {
@@ -107,27 +112,20 @@ async function prepareMaterials(pdf: string, pages: number[], screenshots: strin
   return inputs;
 }
 
-async function readMarkdown(root: string) {
-  const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  const file = entries.find((entry) => entry.isFile() && entry.name === "full.md");
-  if (!file) throw new Error("MinerU result did not contain full.md");
-  return readFile(path.join(file.parentPath, file.name), "utf8");
-}
-
 async function buildContext(course: string, inputs: Input[], courseDir: string): Promise<Context> {
   const context: Context = { course, pages: [], screenshots: [], confirmedAt: null };
   for (const input of inputs) {
-    const markdown = await readMarkdown(input.parsedDirectory!);
+    const { markdown, parsedDirectory } = await readOcrResult(input.parsedDirectory!);
     if (input.kind === "pdf-page") {
       context.pages.push({
         sourcePage: input.sourcePage!,
         pagePdf: input.uploadPath,
         originalPageImage: path.join(courseDir, "original-pages", input.image!),
-        parsedDirectory: input.parsedDirectory!,
+        parsedDirectory,
         markdown,
       });
     } else {
-      context.screenshots.push({ name: input.name, source: input.uploadPath, parsedDirectory: input.parsedDirectory!, markdown });
+      context.screenshots.push({ name: input.name, source: input.uploadPath, parsedDirectory, markdown });
     }
   }
   await writeFile(path.join(courseDir, "context.json"), JSON.stringify(context, null, 2));
@@ -215,7 +213,7 @@ async function main() {
   const courseDir = await courseDirectory(values.course, values["data-dir"]!);
   const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
   const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");
-  const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir, provider);
+  const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
   const pending = await uncachedInputs(
     inputs,
     courseDir,
