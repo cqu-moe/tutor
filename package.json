@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.12.0" },
-  "bin": {
-    "tutor": "bin/tutor.js"
-  },
+  "packageManager": "bun@1.4.4",
+  "engines": { "bun": ">=1.4.4" },
   "scripts": {
-    "test": "node --test"
+    "tutor": "bun --no-env-file src/cli.ts",
+    "build": "bun --no-env-file scripts/build.ts",
+    "test": "bun --no-env-file test --timeout 180000"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",

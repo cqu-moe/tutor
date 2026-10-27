@@ -1,3 +1,4 @@
+import { cliCommand } from "./cli-command.js";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -8,11 +9,10 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const run = promisify(execFile);
-const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
 
 function runCli(args, input, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, ...args], { env });
+    const child = spawn(cliCommand[0], [...cliCommand.slice(1), ...args], { env });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {

@@ -1,4 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+import "./assets.ts";
+import { loadEnvFile } from "node:process";
 import { execFile } from "node:child_process";
 import { access, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -16,6 +18,8 @@ import { promptWithMemory } from "./memory.ts";
 import { reviseLecture } from "./revision.ts";
 import { readDraft, readPublishedLecture, saveDraft, type Lecture } from "./lecture-state.ts";
 import type { ChapterSelection, Context, Input } from "./types.ts";
+import pdfChapters from "../scripts/pdf_chapters.py" with { type: "text" };
+import pkg from "../package.json";
 
 const execute = promisify(execFile);
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp"]);
@@ -77,8 +81,7 @@ async function pdfPageCount(pdf: string) {
 
 async function selectChapter(value: string | undefined, pdf: string, pageCount: number) {
   if (!value?.trim()) throw new Error("--chapter requires a bookmark title; use --pages for an explicit range");
-  const helper = path.resolve(import.meta.dirname, "../scripts/pdf_chapters.py");
-  const chapters: PdfChapter[] = JSON.parse((await command(process.env.TUTOR_PYTHON ?? "python3", [helper, pdf])).stdout);
+  const chapters: PdfChapter[] = JSON.parse((await command(process.env.TUTOR_PYTHON ?? "python3", ["-c", pdfChapters, pdf])).stdout);
   if (!chapters.length) throw new Error("This PDF has no bookmarks; use --pages instead");
   if (chapters.some((chapter) => !Number.isSafeInteger(chapter.page) || chapter.page < 1 || chapter.page > pageCount || !Number.isSafeInteger(chapter.level) || chapter.level < 1)) {
     throw new Error("PDF contains an invalid bookmark; use --pages instead");
@@ -276,8 +279,12 @@ async function redactedMessage(raw: string, agentDir: string | undefined) {
 }
 
 async function main() {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
     options: {
+      help: { type: "boolean", short: "h" },
+      version: { type: "boolean", short: "v" },
+      "env-file": { type: "string" },
       course: { type: "string" },
       pdf: { type: "string" },
       pages: { type: "string" },
@@ -294,7 +301,22 @@ async function main() {
       "mistral-base-url": { type: "string", default: "https://api.mistral.ai" },
     },
   });
+  if (values["env-file"] !== undefined) {
+    try { loadEnvFile(values["env-file"]); }
+    catch { throw new Error("Cannot read --env-file; check its path and permissions"); }
+  }
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
+  if (values.version) { console.log(`tutor ${pkg.version}`); return; }
+  if (values.help) {
+    console.log(`Tutor — generate and revise course lectures\n\nUsage:\n  tutor [--env-file FILE] doctor [--ocr mineru|mistral] [--agent-dir DIR] [--model PROVIDER/MODEL]\n  tutor [--env-file FILE] --course NAME --pdf FILE (--pages RANGE | --chapter TITLE)\n  tutor [--env-file FILE] --course NAME --generate\n  tutor [--env-file FILE] --course NAME --revise FEEDBACK\n  tutor [--env-file FILE] --course NAME --memory REQUEST\n\nOptions:\n  --data-dir DIR       Course storage (default: .tutor)\n  --agent-dir DIR      Pi models.json and auth.json directory\n  --model ID           Vision-capable provider/model\n  --ocr PROVIDER       mineru (default) or mistral\n  --screenshots FILE   Additional image; repeat for multiple images\n  --env-file FILE      Explicit environment file; existing environment wins\n  --help, --version\n\nInstall external dependencies: docs/install.md\nNo .env file is loaded automatically. Doctor makes no model/OCR requests.`);
+    return;
+  }
+  if (positionals.length) {
+    if (positionals.length !== 1 || positionals[0] !== "doctor") throw new Error("Unknown command; run tutor --help");
+    const { doctor } = await import("./doctor.ts");
+    process.exitCode = await doctor({ ocr: values.ocr, agentDir: values["agent-dir"], model: values.model });
+    return;
+  }
   if (!values.course) throw new Error("--course is required");
   const course = normalizedText(values.course);
   const courseDir = await courseDirectory(course, values["data-dir"]!);

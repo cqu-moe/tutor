@@ -18,7 +18,7 @@ The lecture agent keeps its session working directory at the course directory. I
 
 Pi's native `write`, `edit` and `bash` schemas are retained, with mutations executed through the pinned Anthropic sandbox runtime 0.0.81. Only the current stage is writable; absolute paths, parent traversal, symlinks and cross-boundary hardlinks cannot write the published output. Temporary/cache writes stay under the stage's `.tmp`, and the runtime's convenience write directories are explicitly denied. Shell networking is disabled; Tutor's host model/OCR requests remain available. This is a write boundary, not isolation of all readable local files or inherited environment variables.
 
-Node 22.12+ and macOS or Linux are required. Linux also needs the runtime's bubblewrap, socat and ripgrep dependencies; macOS uses system Seatbelt with an added hardlink prohibition. Sandbox initialization or profile mismatch stops the tool without an unsandboxed fallback. The regression suite runs real file tools and drawing commands on macOS; Linux behavior still requires platform validation.
+Bun 1.4.4+ is required for development; standalone Tutor needs no Node.js or Bun installation. macOS or Linux is required. Linux also needs the runtime's bubblewrap, socat and ripgrep dependencies; macOS uses system Seatbelt with an added hardlink prohibition. Sandbox initialization or profile mismatch stops the tool without an unsandboxed fallback. The regression suite has passed against standalone executables on macOS ARM64, macOS x64 through Rosetta, and Linux ARM64 in a configured container. Linux x64 sandbox validation remains pending on native hardware; see [distribution verification](acceptance.md#bun-distribution-verification).
 
 ## Delivery and checks
 
@@ -31,7 +31,7 @@ Generation, compilation, or embedding failure retains the reported `.lecture-*` 
 Set `TUTOR_RECTO_ROOT`, `TUTOR_PYTHON`, `TUTOR_DIAGRAM_PYTHON`, and `TUTOR_TYPST_PACKAGE_CACHE`, then run:
 
 ```sh
-node --test test/diagrams.test.js
+bun --no-env-file test test/diagrams.test.js --timeout 180000
 ```
 
 The test invokes the actual CLI and Pi tools, fixes model responses only at the HTTP boundary, uses real Schemdraw, CeTZ, Typst, Recto, Pandoc, and Poppler, checks the eight-row F4 truth table and SVG labels, rebuilds the delivered Typst, and verifies a late model failure leaves the prior delivery unchanged. It also attempts native file writes, shell writes, symlink writes and hardlink writes against the published lecture, including redirecting the host's final Markdown save through a symlink, and checks that every delivered file remains unchanged.

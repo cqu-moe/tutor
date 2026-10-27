@@ -1,3 +1,4 @@
+import { cliCommand } from "./cli-command.js";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -9,10 +10,10 @@ import test from "node:test";
 
 const run = promisify(execFile);
 
-function runCli(executable, args, input, env) {
+function runCli(args, input, env) {
   let settled = false;
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { env });
+    const child = spawn(cliCommand[0], [...cliCommand.slice(1), ...args], { env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -140,9 +141,8 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
   }));
 
   const dataDir = path.join(root, "data");
-  const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
   try {
-    const stdout = await runCli(cli, [
+    const stdout = await runCli([
       "--course", "Digital Design",
       "--pdf", pdf,
       "--pages", "1",
@@ -166,7 +166,7 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
     assert.equal(context.pages[0].sourcePage, 1);
     await assert.rejects(() => readFile(path.join(dataDir, "digital-design", "output", "content.md")));
 
-    const unconfirmed = await runCli(cli, [
+    const unconfirmed = await runCli([
       "--course", "Digital Design",
       "--pdf", pdf,
       "--pages", "1",
@@ -204,19 +204,18 @@ test("CLI validates page ranges against the physical PDF without an arbitrary ca
 
   const dataDir = path.join(root, "data");
   const courseDir = path.join(dataDir, "range-course");
-  const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
   const env = { ...process.env, NO_COLOR: "1" };
   delete env.MINERU_API_TOKEN;
   const common = ["--course", "Range Course", "--pdf", pdf, "--data-dir", dataDir];
 
   await assert.rejects(
-    () => runCli(cli, [...common, "--pages", `1-${pageCount}`], "", env),
+    () => runCli([...common, "--pages", `1-${pageCount}`], "", env),
     /MINERU_API_TOKEN is required/,
   );
   assert.equal((await readdir(path.join(courseDir, "original-pages"))).filter((name) => name.endsWith(".pdf")).length, 52);
 
   await assert.rejects(
-    () => runCli(cli, [...common, "--pages", `1-${Number.MAX_SAFE_INTEGER}`], "", env),
+    () => runCli([...common, "--pages", `1-${Number.MAX_SAFE_INTEGER}`], "", env),
     new RegExp(`--pages selects beyond the PDF, which has ${pageCount} pages`),
   );
   assert.equal((await readdir(path.join(courseDir, "original-pages"))).filter((name) => name.endsWith(".pdf")).length, 52);
@@ -234,15 +233,14 @@ test("CLI chapter selection reports unusable PDF bookmarks before services", { t
   ].join("\n"));
   await run("typst", ["compile", path.join(root, "repeated.typ"), repeated]);
 
-  const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
   const env = { ...process.env, NO_COLOR: "1" };
   delete env.MINERU_API_TOKEN;
   await assert.rejects(
-    () => runCli(cli, ["--course", "Plain", "--pdf", plain, "--chapter", "Missing", "--data-dir", path.join(root, "data")], "", env),
+    () => runCli(["--course", "Plain", "--pdf", plain, "--chapter", "Missing", "--data-dir", path.join(root, "data")], "", env),
     /This PDF has no bookmarks; use --pages instead/,
   );
   await assert.rejects(
-    () => runCli(cli, ["--course", "Repeated", "--pdf", repeated, "--chapter", "Repeated", "--data-dir", path.join(root, "data")], "", env),
+    () => runCli(["--course", "Repeated", "--pdf", repeated, "--chapter", "Repeated", "--data-dir", path.join(root, "data")], "", env),
     /PDF bookmark title is ambiguous: "Repeated" on page 1, "Repeated" on page 5; use --pages instead/,
   );
 });

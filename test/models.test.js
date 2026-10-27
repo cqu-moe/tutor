@@ -1,3 +1,4 @@
+import { cliCommand } from "./cli-command.js";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -9,10 +10,10 @@ import test from "node:test";
 
 const run = promisify(execFile);
 
-function runCli(executable, args, input, env) {
+function runCli(args, input, env) {
   let settled = false;
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { env });
+    const child = spawn(cliCommand[0], [...cliCommand.slice(1), ...args], { env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -140,8 +141,7 @@ test("default model receives original page and screenshot images", { timeout: 30
   }));
 
   try {
-    const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
-    const stdout = await runCli(cli, [
+    const stdout = await runCli([
       "--course", "Digital Design",
       "--pdf", pdf,
       "--pages", "1",
@@ -254,12 +254,11 @@ test("model failures are actionable, redacted, and preserve course work", { time
     { model: "invalid/protocol-model", failure: /unsupported model API protocol.*models.json/ },
     { model: "echo/failing-model", failure: /HTTP 401.*credentials/ },
   ];
-  const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
   try {
     for (const [index, testCase] of cases.entries()) {
       const dataDir = path.join(root, `data-${index}`);
       await assert.rejects(
-        runCli(cli, [
+        runCli([
           "--course", "Digital Design",
           "--pdf", pdf,
           "--pages", "1",

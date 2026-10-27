@@ -10,7 +10,7 @@ After a teaching route is confirmed, Tutor uses the configured Pi model and inst
 - `TUTOR_DIAGRAM_PYTHON`: Python interpreter with the pinned diagram dependencies in `requirements-diagrams.txt`; required for Schemdraw circuit generation.
 - `TUTOR_TYPST_PACKAGE_CACHE`: local Typst package cache already containing the pinned CeTZ package and its dependencies.
 
-Recto 0.3.1 requires Python 3.10+, python-docx 1.2.x and lxml 5.x/6.x, Pandoc 3.9.0.2+, and Typst 0.15.1+. Run its `doctor.py --style reference` using your chosen interpreter. Use the desktop bundled Python when available; do not install globally. Pi remains pinned in the package lock.
+Recto 0.3.1 requires Python 3.10+, python-docx 1.2.x and lxml 5.x/6.x, Pandoc 3.9.0.2+, and Typst 0.15.1+. Run its `doctor.py --style reference` using your chosen interpreter. Use the desktop bundled Python when available; do not install globally. Pi remains pinned in bun.lock.
 
 Tutor exports the Markdown source through Recto's `reference` style to:
 
@@ -34,7 +34,7 @@ Lecture generation uses the same memory-aware prompt helper as route discussion 
 To retry generation from the saved route without re-importing or calling OCR:
 
 ```sh
-node bin/tutor.js --course "Digital Design" --data-dir .tutor --generate
+tutor --course "Digital Design" --data-dir .tutor --generate
 ```
 
 `draft.json` stores the candidate context, route and confirmation together. `--generate` rejects new PDF/page/screenshot options and requires a confirmed draft in the new process. Model and agent directory options still apply. A new import changes only the draft: cancelling it or failing its export leaves the published lecture and its `output/lecture.json` together. `--revise` always uses that published pair. A successful export publishes its metadata with the files; a failed export can be retried with `--generate`. Existing `context.json` / `route.md` courses are read without deleting those files, and legacy output is bound to that metadata before accepting a new import.
@@ -51,6 +51,6 @@ PDF compilation alone does not replace visual inspection. Check rendered text, f
 
 ## Verification
 
-Set `TUTOR_RECTO_ROOT` and `TUTOR_PYTHON`, then run `npm test`. `test/lecture.test.js` invokes the actual bin, with model/OCR fixtures only at HTTP boundaries. It uses real Recto, Pandoc, and Typst; checks extractable PDF content, shared media, rebuilding, route adjustment, confirmation on restart, and failed export/model preservation. It fails with dependency guidance when Recto is not configured rather than silently skipping the export check. Other route/model tests stop before confirmation; `test/diagrams.test.js` additionally owns confirmed generated diagrams.
+Set `TUTOR_RECTO_ROOT` and `TUTOR_PYTHON`, then run `bun run test`. `test/lecture.test.js` invokes the actual bin, with model/OCR fixtures only at HTTP boundaries. It uses real Recto, Pandoc, and Typst; checks extractable PDF content, shared media, rebuilding, route adjustment, confirmation on restart, and failed export/model preservation. It fails with dependency guidance when Recto is not configured rather than silently skipping the export check. Other route/model tests stop before confirmation; `test/diagrams.test.js` additionally owns confirmed generated diagrams.
 
 Real provider evidence and private sample outputs belong outside the repository. Fixture tests do not prove model teaching quality or live OCR success. User evaluation of whether the lecture can replace the course slides remains separate.

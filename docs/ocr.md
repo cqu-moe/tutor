@@ -4,7 +4,7 @@ Tutor defaults to MinerU VLM. Select Mistral independently of the Pi conversatio
 model:
 
 ```sh
-node --env-file=.env.local bin/tutor.js \
+tutor --env-file .env.local \
   --course "Digital Design" --pdf lecture.pdf --pages 21-24 \
   --screenshots question.png --ocr mistral --data-dir .tutor
 ```
@@ -96,7 +96,7 @@ particular, `403 SignatureDoesNotMatch` at MinerU's signed upload remains a fail
 parse: preserve the files and correct the service problem or explicitly choose
 Mistral. An expired API token must be refreshed outside Tutor.
 
-Run `npm test` for actual-bin checks using fixed external HTTP responses. They
+Run `bun run test` for actual-bin checks using fixed external HTTP responses. They
 cover selection, source/range/endpoint changes, unavailable-service reuse,
 partial-result recovery, preserved work, unsafe resources and bounded downloads.
 Real OCR still needs comparison with the original pages; OCR success alone does

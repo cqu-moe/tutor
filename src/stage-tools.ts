@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { access, lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { sandboxOptions } from "./assets.ts";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import { createBashToolDefinition, createLocalBashOperations, createEditToolDefinition, createWriteToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
@@ -19,6 +20,7 @@ export async function stageTools(courseDir: string, stage: string): Promise<Tool
     process.env.CLAUDE_CODE_TMPDIR = temporary;
     try {
       await SandboxManager.initialize({
+        ...await sandboxOptions(),
         network: { allowedDomains: [], deniedDomains: [] },
         filesystem: {
           denyRead: [], allowWrite: [{ path: root, literal: true }],
@@ -45,7 +47,7 @@ export async function stageTools(courseDir: string, stage: string): Promise<Tool
     const code = content === undefined
       ? "require('node:fs').mkdirSync(process.argv[1], {recursive:true})"
       : "require('node:fs').writeFileSync(process.argv[1], require('node:fs').readFileSync(0))";
-    await sandbox(`${quote(process.execPath)} -e ${quote(code)} ${quote(target)}`, (wrapped) => new Promise<void>((resolve, reject) => {
+    await sandbox(`BUN_BE_BUN=1 ${quote(process.execPath)} --no-env-file -e ${quote(code)} ${quote(target)}`, (wrapped) => new Promise<void>((resolve, reject) => {
       const child = execFile("/bin/bash", ["-c", wrapped], { cwd: courseDir, env: environment, timeout: 30_000 }, (error, _stdout, stderr) => error
         ? reject(new Error(`Tutor stage write failed: ${stderr.slice(-1000) || error.code}`)) : resolve());
       child.stdin!.on("error", () => {});

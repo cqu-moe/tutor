@@ -1,0 +1,94 @@
+name: Bun distribution
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    name: Build all targets and verify native Linux x64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0; reads packageManager
+      - name: Confirm native x64 runner and install packages
+        run: |
+          test "$(uname -m)" = x86_64
+          test "$(id -u)" -ne 0
+          bun install --frozen-lockfile --ignore-scripts
+      - name: Build four executables
+        run: bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
+      - name: Install Linux document dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-venv curl unzip zip xz-utils ca-certificates \
+            poppler-utils bubblewrap socat ripgrep
+          deps="$RUNNER_TEMP/tutor-deps"
+          mkdir -p "$deps/bin" "$deps/typst-packages"
+          cd "$deps"
+
+          curl -fL --retry 3 https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-linux-amd64.tar.gz -o pandoc.tar.gz
+          tar -xzf pandoc.tar.gz --strip-components=2 -C bin pandoc-3.9.0.2/bin/pandoc
+          curl -fL --retry 3 https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz -o typst.tar.xz
+          tar -xJf typst.tar.xz --strip-components=1 -C bin typst-x86_64-unknown-linux-musl/typst
+
+          curl -fL --retry 3 https://github.com/UserUnauthorized/Recto/releases/download/v0.3.1/recto-plugin-0.3.1.zip -o recto-plugin-0.3.1.zip
+          curl -fL --retry 3 https://github.com/UserUnauthorized/Recto/releases/download/v0.3.1/SHA256SUMS -o SHA256SUMS
+          grep ' recto-plugin-0.3.1.zip$' SHA256SUMS | sha256sum --check
+          unzip -q recto-plugin-0.3.1.zip -d recto
+          python3 -m venv python
+          python/bin/pip install -r recto/skills/recto/requirements.txt schemdraw==0.23 pyparsing==3.3.3
+
+          printf '#import "@preview/cetz:0.5.3"\n#cetz.canvas({ import cetz.draw: *; line((0,0), (1,1)) })\n' > cetz-check.typ
+          bin/typst compile --package-cache-path "$deps/typst-packages" cetz-check.typ cetz-check.pdf
+          echo "$deps/bin" >> "$GITHUB_PATH"
+          {
+            echo "TUTOR_RECTO_ROOT=$deps/recto/skills/recto"
+            echo "TUTOR_PYTHON=$deps/python/bin/python"
+            echo "TUTOR_DIAGRAM_PYTHON=$deps/python/bin/python"
+            echo "TUTOR_TYPST_PACKAGE_CACHE=$deps/typst-packages"
+          } >> "$GITHUB_ENV"
+      - name: Relocate binary and remove build dependencies
+        run: |
+          install -m 755 dist/tutor-linux-x64 "$RUNNER_TEMP/tutor"
+          rm -rf node_modules .build/resources
+          echo "TUTOR_TEST_BINARY=$RUNNER_TEMP/tutor" >> "$GITHUB_ENV"
+      - name: Check standalone startup and doctor
+        env:
+          MISTRAL_API_KEY: ci-fixture-not-a-real-key
+        run: |
+          cd "$RUNNER_TEMP"
+          mkdir doctor-agent
+          cat > doctor-agent/models.json <<'JSON'
+          {"providers":{"ci":{"baseUrl":"http://127.0.0.1:1/v1","api":"openai-completions","apiKey":"ci-fixture-not-a-real-key","models":[{"id":"vision","input":["text","image"],"contextWindow":8192,"maxTokens":1024}]}}}
+          JSON
+          ./tutor --version
+          ./tutor --help
+          ./tutor doctor --ocr mistral --agent-dir "$RUNNER_TEMP/doctor-agent" --model ci/vision
+      - name: Test the native Linux x64 executable
+        run: bun run test
+      - name: Generate artifact checksums
+        working-directory: dist
+        run: sha256sum tutor-* > SHA256SUMS
+      - name: Upload verified build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tutor-executables
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
