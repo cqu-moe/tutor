@@ -1,0 +1,15 @@
+{
+  "name": "@cqu-moe/tutor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tutor": "bin/tutor.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.82.1"
+  }
+}
