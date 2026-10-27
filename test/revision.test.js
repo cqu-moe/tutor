@@ -99,7 +99,7 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   await writeFile(path.join(output, "figures", "gate-source.typ"), figureSource);
   const lecture = [
     "# Boolean logic", "", "## Boolean functions", "",
-    "Original explanation. The formula needs both inputs at 1. 来源：PDF 第 21 页。", "",
+    "Original explanation. The formula needs both inputs at 1. 来源：PDF 第 21 页。与门在两个输入均为 1 时输出 1。", "",
     "$$F = xy$$", "", "Derivation: none.", "", "## OR gates", "",
     "OR outputs 1 unless both inputs are 0. Source: PDF page 22.", "",
     "Coverage: 来源：PDF 第 21–24 页。", "",
@@ -154,22 +154,33 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   assert.match(unsafeSession.stderr, /stay inside \.sessions/);
   await rm(path.join(courseDir, "revision-session.json"));
 
+  const adjacentFeedback = "Re-explain the AND output";
+  replacements.set(adjacentFeedback, {
+    oldText: "与门在两个输入均为 1 时输出 1。",
+    newText: "只有两个输入都为 1，AND 门的输出才为 1。",
+  });
+  const adjacent = await runCli([...common, "--revise", adjacentFeedback], env);
+  assert.equal(adjacent.code, 0, adjacent.stderr);
+  const afterAdjacentEdit = await readFile(path.join(output, "content.md"), "utf8");
+  assert.match(afterAdjacentEdit, /只有两个输入都为 1，AND 门的输出才为 1。/);
+
   const citationFeedback = "Re-explain Boolean functions";
   replacements.set(citationFeedback, { oldText: "来源：PDF 第 21 页。", newText: "" });
   const citation = await runCli([...common, "--revise", citationFeedback], env);
   assert.equal(citation.code, 1, "Unrequested Chinese source-citation removal must fail");
   assert.match(citation.stderr, /revision would remove source citations: PDF 第 21 页/);
-  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), lecture);
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), afterAdjacentEdit);
 
   const rangeFeedback = "Condense the source coverage note";
-  replacements.set(rangeFeedback, { oldText: "Coverage: 来源：PDF 第 21–24 页。", newText: "" });
+  replacements.set(rangeFeedback, { oldText: "Coverage: 来源：PDF 第 21--24 页。", newText: "" });
   const range = await runCli([...common, "--revise", rangeFeedback], env);
   assert.equal(range.code, 1, "Unrequested Chinese source-range removal must fail");
-  assert.match(range.stderr, /revision would remove source citations: PDF 第 21–24 页/);
-  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), lecture);
+  assert.match(range.stderr, /revision would remove source citations: PDF 第 21--24 页/);
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), afterAdjacentEdit);
 
   for (const feedback of replacements.keys()) {
     if (feedback === "Break export") continue;
+    if (feedback === adjacentFeedback) continue;
     if (feedback === citationFeedback) continue;
     if (feedback === rangeFeedback) continue;
     const revised = await runCli([...common, "--revise", feedback], env);

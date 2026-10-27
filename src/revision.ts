@@ -43,7 +43,7 @@ function preservesOriginal(original: string, revised: string) {
   const checks: Array<[name: string, pattern: RegExp]> = [
     ["section headings", /^#{1,6}\s+(.+?)\s*#*$/gm],
     ["media references", /!\[[^\]]*\]\((media\/[^)\s]+)\)/g],
-    ["source citations", /((?:PDF page|Screenshot|PDF\s*第\s*\d+(?:\s*[-–—,，、]+\s*\d+)*\s*页)[^\n.!;]*)/gi],
+    ["source citations", /((?:PDF page|Screenshot)[^\n.!;]*|PDF\s*第\s*\d+(?:\s*[-–—,，、]+\s*\d+)*\s*页)/gi],
   ];
   if (JSON.stringify(headingSequence(original)) !== JSON.stringify(headingSequence(revised))) {
     return "revision would change teaching route order; confirm a new teaching route first";
