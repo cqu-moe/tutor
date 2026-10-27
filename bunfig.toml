@@ -1,0 +1,2 @@
+# Match the standalone executable: load environment files only when explicitly requested.
+env = false

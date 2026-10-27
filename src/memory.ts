@@ -1,9 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
-const require = createRequire(import.meta.url);
 export const memoryTools = ["memory_read", "memory_write", "memory_forget", "memory_restore"];
 
 export async function prepareMemory(courseDir: string) {
@@ -25,7 +23,7 @@ export async function prepareMemory(courseDir: string) {
     throw new Error(`learner memory read/setup failed: ${(error as NodeJS.ErrnoException).code ?? "unreadable storage"}`);
   }
   return {
-    extensionPath: path.dirname(require.resolve("pi-memory/package.json")),
+    extensionFactory: (await import("pi-memory")).default,
     systemPrompt: [
       `Learner memory scope: [[course:${path.basename(courseDir)}]].`,
       "Read long_term with memory_read before proposing a teaching route or maintaining memory; it is authoritative and not truncated like the injected snapshot.",

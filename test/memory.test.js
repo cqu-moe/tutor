@@ -1,3 +1,4 @@
+import { cliCommand } from "./cli-command.js";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -8,7 +9,6 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const run = promisify(execFile);
-const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
 const progress = "#progress [[course:digital-design]] Boolean basics: already learned, per learner feedback.";
 const correctedProgress = "#progress [[course:digital-design]] Boolean basics: not yet learned, per learner correction.";
 const otherProgress = "#progress [[course:calculus]] Boolean basics: already learned in a prerequisite, per learner feedback.";
@@ -17,7 +17,7 @@ const weakness = "#weakness [[course:digital-design]] De Morgan variable renamin
 
 function runCli(args, input, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cli, args, { env, cwd: path.dirname(cli) });
+    const child = spawn(cliCommand[0], [...cliCommand.slice(1), ...args], { env, cwd: import.meta.dirname });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => { child.kill("SIGTERM"); reject(new Error("CLI timed out")); }, 20_000);

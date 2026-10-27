@@ -12,7 +12,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { memoryTools, prepareMemory } from "./memory.ts";
 import { stageTools } from "./stage-tools.ts";
 
-const defaultModel = "magpie/codex/gpt-6.1-sol";
+export const defaultModel = "magpie/codex/gpt-6.1-sol";
 
 export async function imageContent(file: string) {
   const extension = path.extname(file).slice(1).toLowerCase();
@@ -46,7 +46,7 @@ export async function createTutorSession(
   const resourceLoader = new DefaultResourceLoader({
     cwd: courseDir,
     agentDir: effectiveAgentDir,
-    additionalExtensionPaths: [memory.extensionPath],
+    extensionFactories: [memory.extensionFactory],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
