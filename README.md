@@ -2,7 +2,29 @@
 
 组合现成工具的个人课程讲解 Agent：读取课程资料和学习者记忆，先对齐教学路线，再生成能够独立阅读、替代指定范围课件的讲解稿。
 
-当前处于规格与集成方案阶段，CLI 尚未实现。
+CLI 已可从真实课程 PDF 生成可重建的讲解稿。安装依赖后，先用一条导入命令确认教学路线；确认时生成 Markdown、Typst、PDF 和图片，之后可用局部反馈继续修订。
+
+## 快速开始
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+node --env-file=.env.local bin/tutor.js \
+  --course "Digital Design" --pdf lecture.pdf --pages 21-24 \
+  --ocr mistral --data-dir ./courses
+```
+
+首次导入会解析所选页、保存原页和解析结果，然后显示教学路线。按提示输入调整意见，或输入 `confirm` 确认；未确认前不会生成完整讲解稿。之后可在新进程中重新生成或修订：
+
+```sh
+node --env-file=.env.local bin/tutor.js \
+  --course "Digital Design" --data-dir ./courses --generate
+
+node --env-file=.env.local bin/tutor.js \
+  --course "Digital Design" --data-dir ./courses \
+  --revise "补充第 23 页 De Morgan 定律的完整推导"
+```
+
+学习者记忆、模型和 OCR 配置、导出依赖、失败保全以及验收步骤见下方文档。Tutor 不自动读取任意 env 文件；上面的 `--env-file=.env.local` 是 Node 的启动参数。
 
 ## 第一版范围
 
@@ -20,6 +42,11 @@
 - [第一版规格](docs/spec.md)
 - [工具组合与流程](docs/plan.md)
 - [需求与调研记录](docs/discovery.md)
+- [模型配置](docs/models.md)
+- [OCR 配置与缓存](docs/ocr.md)
+- [讲解导出](docs/export.md)
+- [学习者记忆](docs/memory.md)
+- [真实课程验收](docs/acceptance.md)
 - [领域术语](GLOSSARY.md)
 - [Agent 工作约定](AGENTS.md)
 
