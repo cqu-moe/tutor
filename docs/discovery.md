@@ -130,7 +130,7 @@
 
 ## 可复用资产与实际检查
 
-- 当前目录尚无 Git 仓库、源代码或项目配置。
+- 需求调研开始时，当前目录尚无 Git 仓库、源代码或项目配置；后续仓库与工程技能配置进展见下文。
 - PATH 中已找到 Node.js、npm、pnpm、Pi、Typst 和 Poppler 的 PDF 工具。
 - 已读取本机 Pi 包元数据及 SDK 文档：`@earendil-works/pi-coding-agent` 0.82.1，支持持久会话、恢复会话、自定义系统提示和加载上下文。会话持久化本身不能满足学习者记忆需求；尚未运行本项目的 SDK 集成。
 - 已阅读现有 Recto `study-notes` 指令：其中已有独立可读的讲解、按学习依赖重组内容、核对公式与原页、精选例题、保存 Markdown 后导出 Typst/PDF 等规则。它可作为候选资产，不代表用户已决定复用或沿用其默认值。
@@ -139,7 +139,14 @@
 
 - 用户调用 `mattpocock-skills:to-spec`，要求综合已有讨论形成规格。
 - 用户已确认以完整 CLI 学习任务作为主要测试入口：导入课程资料、确认教学路线、生成和修改讲解稿、重开会话取回学习者记忆。自动检查可见行为、文件和记忆规则；用真实课件验证两家 OCR、模型读图与 PDF，教学质量由用户试用判断。
-- 已生成本地规格；当前目录仍无 Git remote、项目 issue tracker 或 triage 标签配置，尚未发布或应用 `ready-for-agent`。按该技能要求，发布前需运行 `/setup-matt-pocock-skills` 明确目标与约定。
+- 规格先保存为本地文档，随后在项目 tracker 配置完成后发布为 [GitHub Issue #1](https://github.com/cqu-moe/tutor/issues/1)，应用 `ready-for-agent` 标签。
+
+## 仓库与工程技能配置
+
+- 用户明确要求创建公开仓库 [cqu-moe/tutor](https://github.com/cqu-moe/tutor)，并调用 `setup-matt-pocock-skills`。
+- 项目使用该仓库的 GitHub Issues；用户确认五个默认 triage 标签，并在核对完整配置草稿后选择创建 `AGENTS.md`。
+- 配置写入 `AGENTS.md` 和 `docs/agents/`；领域文档采用 single-context，保留现有术语表，ADR 按需创建。
+- GitHub 仓库已创建并核实为公开、Issues 已开启；五个标签已齐备。公开文档移除了本机绝对路径和私有会话链接，课程资料未加入仓库。
 
 ## 记录约定
 

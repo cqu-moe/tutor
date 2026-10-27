@@ -1,6 +1,6 @@
 # Tutor：组合现成工具的个人课程讲解 Agent
 
-状态：已根据需求讨论形成规格；用户已确认测试边界。项目尚未配置 issue tracker，本文尚未发布；发布时使用 `ready-for-agent` 标签。
+状态：已发布为 [GitHub Issue #1](https://github.com/cqu-moe/tutor/issues/1)，标签为 `ready-for-agent`；用户已确认测试边界。
 
 ## Problem Statement
 
@@ -150,7 +150,7 @@ Agent 自动记录明确的学习进度、学习偏好和困难。行为推测�
 - 真实 OCR 验收需要相应服务的凭据；当前未向 OCR 服务上传课件。首次试用应记录识别疑点和实际服务限制，不将“接口已封装”当作验收完成。
 - “相同模型在不同产品中讲解质量不同是否由系统提示造成”仍是待验证假设。第一版以真实课程材料的试用结果判断改进，不预先归因。
 - 领域术语沿用项目术语表，未发现适用的既有 ADR。规格发布不意味着开始实现或所有外部依赖已通过验证。
-- `to-spec` 要求发布到项目 issue tracker 并应用 `ready-for-agent`。当前项目没有 Git remote 或 tracker 配置，应先运行 `/setup-matt-pocock-skills` 明确发布目标与标签约定，再发布本规格。
+- 本项目已按 `setup-matt-pocock-skills` 确认使用 cqu-moe/tutor 的 GitHub Issues、五个默认 triage 标签和 single-context 领域文档布局；规格使用 `ready-for-agent` 标签。
 
 已核查的主要来源：
 

@@ -1,6 +1,6 @@
 # Tutor 第一版方案
 
-状态：已整理为 [第一版规格](spec.md)，用户已确认测试边界；issue tracker 待配置，尚未发布。详细依据见 [discovery.md](discovery.md)，领域术语见 [GLOSSARY.md](../GLOSSARY.md)。
+状态：已整理为 [第一版规格](spec.md) 并发布为 [GitHub Issue #1](https://github.com/cqu-moe/tutor/issues/1)，标签为 `ready-for-agent`；用户已确认测试边界。详细依据见 [discovery.md](discovery.md)，领域术语见 [GLOSSARY.md](../GLOSSARY.md)。
 
 ## 要做出的体验
 
