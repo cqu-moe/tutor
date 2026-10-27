@@ -9,6 +9,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { memoryTools, prepareMemory } from "./memory.ts";
 
 const defaultModel = "magpie/codex/gpt-6.1-sol";
 
@@ -36,23 +37,27 @@ export async function createTutorSession(
     throw new Error(`Pi model ${requested.model?.provider}/${requested.model?.id} cannot read course images`);
   }
 
+  const memory = await prepareMemory(courseDir);
   const resourceLoader = new DefaultResourceLoader({
     cwd: courseDir,
     agentDir: effectiveAgentDir,
+    additionalExtensionPaths: [memory.extensionPath],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    systemPrompt: options?.systemPrompt,
+    systemPrompt: [options?.systemPrompt, memory.systemPrompt].filter(Boolean).join("\n\n"),
   });
   await resourceLoader.reload();
+  const extensionFailure = resourceLoader.getExtensions().errors[0];
+  if (extensionFailure) throw new Error(`learner memory extension failed to load: ${extensionFailure.error}`);
   const { session } = await createAgentSession({
     cwd: courseDir,
     agentDir: effectiveAgentDir,
     modelRuntime,
     model: requested.model,
-    tools: options?.tools,
+    tools: [...(options?.tools ?? ["read", "bash", "edit", "write"]), ...memoryTools],
     resourceLoader,
     sessionManager: SessionManager.inMemory(),
   });

@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseWithMinerU } from "./mineru.ts";
 import { proposeRoute } from "./model.ts";
+import { createTutorSession } from "./runtime.ts";
+import { promptWithMemory } from "./memory.ts";
 import type { Context, Input } from "./types.ts";
 
 const execute = promisify(execFile);
@@ -172,11 +174,24 @@ async function main() {
       "data-dir": { type: "string", default: ".tutor" },
       "agent-dir": { type: "string" },
       model: { type: "string" },
+      memory: { type: "string" },
       "mineru-base-url": { type: "string", default: "https://mineru.net" },
     },
   });
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
   if (!values.course) throw new Error("--course is required");
+  const courseDir = await courseDirectory(values.course, values["data-dir"]!);
+  if (values.memory !== undefined) {
+    if (!values.memory.trim()) throw new Error("--memory requires a learner-memory request");
+    await mkdir(courseDir, { recursive: true });
+    const session = await createTutorSession(courseDir, values["agent-dir"], values.model, { tools: [] });
+    try {
+      console.log(await promptWithMemory(session, `Course: ${values.course}\nLearner memory request: ${values.memory}`));
+    } finally {
+      session.dispose();
+    }
+    return;
+  }
   if (!values.pdf) throw new Error("--pdf is required");
   if (!values.pages) throw new Error("--pages is required");
   const pages = parsePages(values.pages);
@@ -191,7 +206,6 @@ async function main() {
   const token = process.env.MINERU_API_TOKEN;
   if (!token) throw new Error("MINERU_API_TOKEN is required. MinerU's precision API uses a Bearer token.");
 
-  const courseDir = await courseDirectory(values.course, values["data-dir"]!);
   const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
   await parseWithMinerU(inputs, values["mineru-base-url"]!.replace(/\/$/, ""), token, courseDir);
   const context = await buildContext(values.course, inputs, courseDir);

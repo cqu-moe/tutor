@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { createTutorSession, imageContent } from "./runtime.ts";
+import { promptWithMemory } from "./memory.ts";
 import type { Context } from "./types.ts";
 
 export async function proposeRoute(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined) {
@@ -37,49 +38,46 @@ export async function proposeRoute(context: Context, courseDir: string, agentDir
   const nextLine = () => queuedLines.length
     ? Promise.resolve(queuedLines.shift()!)
     : Promise.resolve(inputClosed ? undefined : new Promise<string | undefined>((resolve) => lineWaiters.push(resolve)));
-  session.subscribe((event) => {
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      process.stdout.write(event.assistantMessageEvent.delta);
-      output += event.assistantMessageEvent.delta;
-    }
-  });
-  await session.prompt(ask, { images });
-  if (!output.trim()) {
-    const failure = session.agent.state.errorMessage ?? "the model returned no route";
-    session.dispose();
-    throw new Error(`Pi route generation failed: ${failure}`);
-  }
-
-  process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
-  for (;;) {
-    const line = await nextLine();
-    if (line === undefined) {
-      lines.close();
-      await writeFile(path.join(courseDir, "route-draft.md"), `${output.trim()}\n`);
-      process.stdout.write("\nRoute was not confirmed; the proposed route remains saved locally.\n");
-      session.dispose();
-      return;
-    }
-    if (line.trim().toLowerCase() === "confirm") {
-      context.confirmedAt = new Date().toISOString();
-      lines.close();
-      await writeFile(path.join(courseDir, "context.json"), JSON.stringify(context, null, 2));
-      await writeFile(path.join(courseDir, "route.md"), `${output.trim()}\n`);
-      process.stdout.write("Teaching route confirmed. Full lecture generation remains disabled until a later ticket.\n");
-      session.dispose();
-      return;
-    }
-    if (!line.trim()) continue;
-    process.stdout.write("\n");
-    const current = output;
-    output = "";
-    await session.prompt(`Adjust this teaching route. Return the complete revised route only.\n\nCurrent route:\n${current}\n\nUser adjustment: ${line}`);
+  try {
+    output = await promptWithMemory(session, ask, { images });
+    process.stdout.write(output);
     if (!output.trim()) {
-      const failure = session.agent.state.errorMessage ?? "the model returned no revised route";
-      lines.close();
-      session.dispose();
-      throw new Error(`Pi route adjustment failed: ${failure}`);
+      const failure = session.agent.state.errorMessage ?? "the model returned no route";
+      throw new Error(`Pi route generation failed: ${failure}`);
     }
+
     process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
+    for (;;) {
+      const line = await nextLine();
+      if (line === undefined) {
+        lines.close();
+        await writeFile(path.join(courseDir, "route-draft.md"), `${output.trim()}\n`);
+        process.stdout.write("\nRoute was not confirmed; the proposed route remains saved locally.\n");
+        return;
+      }
+      if (line.trim().toLowerCase() === "confirm") {
+        context.confirmedAt = new Date().toISOString();
+        lines.close();
+        await writeFile(path.join(courseDir, "context.json"), JSON.stringify(context, null, 2));
+        await writeFile(path.join(courseDir, "route.md"), `${output.trim()}\n`);
+        process.stdout.write("Teaching route confirmed. Full lecture generation remains disabled until a later ticket.\n");
+        return;
+      }
+      if (!line.trim()) continue;
+      process.stdout.write("\n");
+      const current = output;
+      output = "";
+      output = await promptWithMemory(session, `Adjust this teaching route. Record any explicit learner feedback before responding. Return the complete revised route.\n\nCurrent route:\n${current}\n\nUser adjustment: ${line}`);
+      process.stdout.write(output);
+      if (!output.trim()) {
+        const failure = session.agent.state.errorMessage ?? "the model returned no revised route";
+        lines.close();
+        throw new Error(`Pi route adjustment failed: ${failure}`);
+      }
+      process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
+    }
+  } finally {
+    lines.close();
+    session.dispose();
   }
 }
