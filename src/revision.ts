@@ -1,6 +1,7 @@
 import { copyFile, cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { promptWithMemory } from "./memory.ts";
 import { createTutorSession, imageContent } from "./runtime.ts";
 import type { Context } from "./types.ts";
 
@@ -80,6 +81,9 @@ export async function reviseLecture(
   try {
     await copyFile(output, source);
     await cp(path.join(courseDir, "output", "media"), path.join(stage, "media"), { recursive: true });
+    await cp(path.join(courseDir, "output", "figures"), path.join(stage, "figures"), { recursive: true }).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
     session = await createTutorSession(courseDir, agentDir, model, {
       sessionManager: await persistedSession(courseDir),
       systemPrompt: "Revise an existing lecture with the smallest precise edit. Do not rewrite untouched sections, headings, media references, citations, or formula conditions. Never infer learning progress from a revision.",
@@ -87,7 +91,8 @@ export async function reviseLecture(
     });
     let toolFailed = false;
     session.subscribe((event) => {
-      if (event.type === "tool_execution_end" && (event.isError || event.result?.isError)) toolFailed = true;
+      if (event.type === "tool_execution_end" && ["read", "edit", "grep", "find"].includes(event.toolName)
+        && (event.isError || event.result?.isError)) toolFailed = true;
     });
     const images = await Promise.all([
       ...context.pages.map((page) => imageContent(page.originalPageImage)),
@@ -99,13 +104,10 @@ export async function reviseLecture(
       ...context.screenshots.map((screenshot) => `Screenshot ${screenshot.name}\n${screenshot.markdown}`),
     ].join("\n\n");
     console.log("Revising lecture with targeted edits...");
-    await session.prompt(`Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n\nConfirmed route:\n${await readFile(path.join(courseDir, "route.md"), "utf8")}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, { images });
-    const last = session.agent.state.messages.findLast((message) => message.role === "assistant");
+    await promptWithMemory(session, `Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n\nConfirmed route:\n${await readFile(path.join(courseDir, "route.md"), "utf8")}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, { images });
     const revised = await readFile(source, "utf8");
-    if (toolFailed || session.agent.state.errorMessage || last?.role !== "assistant" || last.stopReason !== "stop" || revised === original) {
-      const failure = session.agent.state.errorMessage
-        ?? (toolFailed ? "the revision tool failed" : `no complete revision (stop reason: ${last?.role === "assistant" ? last.stopReason : "empty"})`);
-      throw new Error(failure);
+    if (toolFailed || revised === original) {
+      throw new Error(toolFailed ? "the revision tool failed" : "the model did not change the staged lecture");
     }
     const preserved = preservesOriginal(original, revised);
     if (preserved) throw new Error(preserved);

@@ -25,6 +25,8 @@ Chinese is the default with English key terms retained on first use; current use
 
 Only the final assistant message with a successful stop is exported; tool-call preludes, errors, aborted and truncated responses cannot become a successful delivery. Generation and export use fresh staging directories. On failure, sources/assets remain in the reported `.lecture-*` path and the last successful `output/` is untouched. Publication restores the previous output if the final rename fails. Run one task at a time per course directory.
 
+Lecture generation uses the same memory-aware prompt helper as route discussion and maintenance. Failed memory tools block publication, and model failures report safe status/configuration guidance without arbitrary upstream bodies. Partial assistant text is retained as a draft only. Generating a lecture does not itself create learner progress or mastery evidence.
+
 To retry generation from the saved route without re-importing or calling OCR:
 
 ```sh

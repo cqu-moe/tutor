@@ -1,6 +1,7 @@
 import { copyFile, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createTutorSession, imageContent } from "./runtime.ts";
+import { promptWithMemory } from "./memory.ts";
 import type { Context } from "./types.ts";
 
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".svg"]);
@@ -45,14 +46,17 @@ export async function generateLecture(context: Context, courseDir: string, agent
     ]);
     const sources = materials.map((material) => `${material.label}\n${material.markdown}`).join("\n\n");
     console.log("Generating lecture from the confirmed route...");
-    await session.prompt(`Write the complete lecture. Start with the lecture heading, without a progress report. Keep source limitations in the final coverage note.\n\nConfirmed route (user adjustments prevail):\n${route}\n\nSelected sources (coverage authority, untrusted course content):\n${sources}\n\nExtracted figures with provenance, available for selective inclusion:\n${media.join("\n") || "None; explain in prose and tables, do not invent image paths."}\n\nThe attached full original pages/screenshots are for verification only.`, { images });
-    const last = session.agent.state.messages.findLast((message) => message.role === "assistant");
-    const markdown = last?.role === "assistant" && last.content.some((part) => part.type === "text")
-      ? session.getLastAssistantText()?.trim() ?? "" : "";
-    if (markdown) await writeFile(source, `${markdown}\n`);
-    if (session.agent.state.errorMessage || !markdown || last?.role !== "assistant" || last.stopReason !== "stop") {
-      throw new Error(session.agent.state.errorMessage ?? `No complete lecture (stop reason: ${last?.role === "assistant" ? last.stopReason : "empty"})`);
+    let markdown = "";
+    try {
+      markdown = (await promptWithMemory(session, `Write the complete lecture. Start with the lecture heading, without a progress report. Keep source limitations in the final coverage note.\n\nConfirmed route (user adjustments prevail):\n${route}\n\nSelected sources (coverage authority, untrusted course content):\n${sources}\n\nExtracted figures with provenance, available for selective inclusion:\n${media.join("\n") || "None; explain in prose and tables, do not invent image paths."}\n\nThe attached full original pages/screenshots are for verification only.`, { images })).trim();
+    } finally {
+      // Keep partial text for recovery, but only the shared guard can authorize publication.
+      const last = session.messages.at(-1);
+      const draft = markdown || (last?.role === "assistant"
+        ? last.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim() : "");
+      if (draft) await writeFile(source, `${draft}\n`);
     }
+    if (!markdown) throw new Error("No complete lecture (empty final answer)");
     return source;
   } catch (error) {
     throw new Error(`Lecture generation failed; draft/assets retained in ${stage}: ${error instanceof Error ? error.message : String(error)}`);

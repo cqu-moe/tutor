@@ -225,7 +225,7 @@ test("model failures are actionable, redacted, and preserve course work", { time
     modelRequests.push(payload);
     if (payload.model === "failing-model") {
       response.writeHead(401, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: `Invalid API key: ${modelSecret}; access ${oauthSecret}` } }));
+      response.end(JSON.stringify({ error: { message: `Invalid API key: ${modelSecret}; access ${oauthSecret}; upstream-private-detail` } }));
       return;
     }
     sse(response, "## Proposed route");
@@ -242,8 +242,8 @@ test("model failures are actionable, redacted, and preserve course work", { time
   await writeFile(path.join(agentDir, "models.json"), JSON.stringify({
     providers: {
       text: { ...base, apiKey: "text-key", models: [{ id: "text-model", input: ["text"] }] },
-      invalid: { ...base, api: "not-a-protocol", apiKey: modelSecret, models: [{ id: "protocol-model", input: ["text", "image"] }] },
-      echo: { ...base, apiKey: modelSecret, models: [{ id: "failing-model", input: ["text", "image"] }] },
+      invalid: { ...base, api: "not-a-protocol", apiKey: "protocol-key", models: [{ id: "protocol-model", input: ["text", "image"] }] },
+      echo: { ...base, apiKey: `!printf ${modelSecret}`, models: [{ id: "failing-model", input: ["text", "image"] }] },
     },
   }));
 
@@ -251,8 +251,8 @@ test("model failures are actionable, redacted, and preserve course work", { time
 
   const cases = [
     { model: "text/text-model", failure: /cannot read course images/ },
-    { model: "invalid/protocol-model", failure: /No API provider registered for api: not-a-protocol/ },
-    { model: "echo/failing-model", failure: /401|credential|API key/ },
+    { model: "invalid/protocol-model", failure: /unsupported model API protocol.*models.json/ },
+    { model: "echo/failing-model", failure: /HTTP 401.*credentials/ },
   ];
   const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
   try {
@@ -272,6 +272,7 @@ test("model failures are actionable, redacted, and preserve course work", { time
           assert.match(error.message, testCase.failure);
           assert.doesNotMatch(error.message, new RegExp(modelSecret));
           assert.doesNotMatch(error.message, new RegExp(oauthSecret));
+          assert.doesNotMatch(error.message, /upstream-private-detail/);
           return true;
         },
       );

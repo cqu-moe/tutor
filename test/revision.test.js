@@ -66,6 +66,7 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   const output = path.join(courseDir, "output");
   await mkdir(parsed, { recursive: true });
   await mkdir(path.join(output, "media"), { recursive: true });
+  await mkdir(path.join(output, "figures"), { recursive: true });
   await writeFile(path.join(parsed, "full.md"), "Boolean function F = xy with AND truth table.\n");
   await mkdir(path.join(courseDir, "original-pages"), { recursive: true });
   await writeFile(path.join(courseDir, "original-pages", "page-21.png"), "");
@@ -86,6 +87,8 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   }));
   const gate = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><path d="M0 5H20" stroke="black"/></svg>';
   await writeFile(path.join(output, "media", "gate.svg"), gate);
+  const figureSource = "// source drawing retained for later regeneration\n";
+  await writeFile(path.join(output, "figures", "gate-source.typ"), figureSource);
   const lecture = [
     "# Boolean logic", "", "## Boolean functions", "",
     "Original explanation. The formula needs both inputs at 1. Source: PDF page 21.", "",
@@ -157,6 +160,7 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   assert.match(source, /PDF page 21/);
   const mediaFile = (await readdir(path.join(output, "media"), { recursive: true })).find((file) => file.endsWith("gate.svg"));
   assert.equal(await readFile(path.join(output, "media", mediaFile), "utf8"), gate);
+  assert.equal(await readFile(path.join(output, "figures", "gate-source.typ"), "utf8"), figureSource);
   assert.match(JSON.stringify(requests[2].messages), /Rewrite the Boolean functions section/);
   assert.match(JSON.stringify(requests[4].messages), /Add the missing derivation/);
   const { stdout: pdfText } = await run("pdftotext", [path.join(output, "document.pdf"), "-"]);

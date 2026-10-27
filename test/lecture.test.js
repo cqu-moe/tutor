@@ -43,6 +43,11 @@ function sse(response, delta, finish = "stop") {
   ].join("\n\n"));
 }
 
+function userText(message) {
+  if (typeof message.content === "string") return message.content;
+  return message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+}
+
 async function serve(t, handler) {
   const server = createServer(handler);
   await new Promise((resolve, reject) => {
@@ -80,20 +85,41 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
     response.writeHead(404).end();
   });
   let mode = "success";
+  const modelSecret = "lecture-command-key";
   const lectureRequests = [];
   const model = await serve(t, async (request, response) => {
     const payload = await body(request);
     const messages = JSON.stringify(payload.messages);
+    const prompt = userText(payload.messages.findLast((message) => message.role === "user"));
+    if (prompt.includes("Edit exactly .revision-")) {
+      if (payload.messages.at(-1)?.role === "tool") return sse(response, { content: "Revision complete." });
+      const source = prompt.match(/\.revision-[^\s]+\/content\.md/)?.[0];
+      return sse(response, {
+        content: "I will make the targeted edit.",
+        tool_calls: [{ index: 0, id: "edit-source", type: "function", function: { name: "edit", arguments: JSON.stringify({ path: source, edits: [{
+          oldText: "新增例题：输入都是 1 时，与运算才输出 1。",
+          newText: "补充推导：先固定 x=1、y=1，再检查与运算条件。\n\n新增例题：输入都是 1 时，与运算才输出 1。",
+        }] }) } }],
+      }, "tool_calls");
+    }
+    if (messages.includes("Learner memory request:")) {
+      if (payload.messages.at(-1).role === "tool") return sse(response, { content: String(payload.messages.at(-1).content) });
+      return sse(response, { tool_calls: [{ index: 0, id: "read-memory", type: "function", function: {
+        name: "memory_read", arguments: JSON.stringify({ target: "long_term" }),
+      } }] }, "tool_calls");
+    }
     if (!messages.includes("Write the complete lecture")) {
       return sse(response, { content: messages.includes("Start with gates") ? "## Confirmed order\nGates first; Boolean functions second.\nUser preference: concise Chinese." : "## Route\nBoolean functions first; gates second." });
     }
     lectureRequests.push(payload);
-    if (mode === "model-error") return response.writeHead(401).end(JSON.stringify({ error: { message: "fixture model unavailable" } }));
+    if (mode === "model-error") return response.writeHead(401).end(JSON.stringify({ error: { message: `Invalid key ${modelSecret}; upstream-private-detail` } }));
     if (mode === "truncated") return sse(response, { content: "# Incomplete lecture" }, "length");
     if (!payload.messages.some((message) => message.role === "tool")) {
       return sse(response, {
         content: "I will inspect the source before writing.",
-        tool_calls: [{ index: 0, id: "read-source", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "route.md" }) } }],
+        tool_calls: [{ index: 0, id: "read-source", type: "function", function: mode === "memory-error"
+          ? { name: "memory_restore", arguments: JSON.stringify({ recoveryId: "invalid-id" }) }
+          : { name: "read", arguments: JSON.stringify({ path: "route.md" }) } }],
       }, "tool_calls");
     }
     const content = mode === "export-error" ? "# Draft retained\n\n<div>Unsupported raw HTML</div>" : [
@@ -106,7 +132,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const agentDir = path.join(root, "pi");
   await mkdir(agentDir);
   await writeFile(path.join(agentDir, "models.json"), JSON.stringify({ providers: { tutorTest: {
-    baseUrl: `${model}/v1`, api: "openai-completions", apiKey: "test-only",
+    baseUrl: `${model}/v1`, api: "openai-completions", apiKey: `!printf ${modelSecret}`,
     compat: { supportsUsageInStreaming: false }, models: [{ id: "lecture-model", input: ["text", "image"] }],
   } } }));
   const dataDir = path.join(root, "data");
@@ -123,9 +149,10 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.match(denied.stderr, /Confirm the teaching route/);
   assert.equal(lectureRequests.length, 0, "unconfirmed material must never reach generation");
 
-  const confirmed = await runCli(args, "Start with gates\nconfirm\n", env);
+  const confirmed = await runCli(args, "Start with gates\nconfirm\nAdd the missing derivation\ndone\n", env);
   assert.equal(confirmed.code, 0, confirmed.stderr);
   assert.match(confirmed.stdout, /Lecture exported/);
+  assert.match(confirmed.stdout, /Lecture revised/);
   const prompt = JSON.stringify(lectureRequests[0].messages);
   assert.match(prompt, /Gates first; Boolean functions second/);
   assert.match(prompt, /AND truth table/);
@@ -137,18 +164,28 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.match(source, /media\//);
   assert.match(source, /\$\$F = xy\$\$/);
   assert.match(source, /\$xy\$/);
+  assert.match(source, /补充推导：先固定 x=1、y=1/);
   const { stdout: extracted } = await run("pdftotext", [path.join(output, "document.pdf"), "-"]);
   assert.match(extracted, /Boolean function/);
   assert.match(extracted, /AND/);
   await run("typst", ["compile", "--root", ".", "--font-path", "typst/fonts", "typst/document.typ", path.join(root, "rebuilt.pdf")], { cwd: output });
+  const learnerMemory = await runCli([...common, "--memory", "Show my learner memory"], "", env);
+  assert.equal(learnerMemory.code, 0, learnerMemory.stderr);
+  assert.match(learnerMemory.stdout, /empty or does not exist/, "generation without learner feedback must not create memory facts");
   const files = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg)$/.test(file));
   const good = await Promise.all(files.map((file) => readFile(path.join(output, file))));
-  for (const failure of ["export-error", "truncated", "model-error"]) {
+  // Generation is a separate caller: route/maintenance tests cannot catch it bypassing the shared guard.
+  for (const failure of ["export-error", "truncated", "model-error", "memory-error"]) {
     mode = failure;
     const failed = await runCli([...common, "--generate"], "", env);
     assert.equal(failed.code, 1, `${failure}: ${failed.stdout}`);
     assert.doesNotMatch(failed.stdout, /Lecture exported/);
     assert.match(failed.stderr, failure === "export-error" ? /Unsupported Div/ : /generation failed/);
+    if (failure === "memory-error") assert.match(failed.stderr, /memory operation failed.*memory_restore/);
+    if (failure === "model-error") {
+      assert.match(failed.stderr, /HTTP 401.*credentials/);
+      assert.doesNotMatch(failed.stderr, /lecture-command-key|upstream-private-detail/);
+    }
     assert.deepEqual(await Promise.all(files.map((file) => readFile(path.join(output, file)))), good);
     const context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
     await readFile(path.join(context.pages[0].parsedDirectory, "full.md"));
@@ -157,6 +194,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const stages = (await readdir(courseDir)).filter((name) => name.startsWith(".lecture-"));
   const drafts = await Promise.all(stages.map((stage) => readFile(path.join(courseDir, stage, "content.md"), "utf8").catch(() => "")));
   assert.ok(drafts.some((draft) => draft.includes("Draft retained")), "failed export must keep the usable generated source");
+  assert.ok(drafts.some((draft) => draft.includes("Incomplete lecture")), "failed generation must keep partial source");
   mode = "success";
   const resumed = await runCli([...common, "--generate"], "", env);
   assert.equal(resumed.code, 0, resumed.stderr);
