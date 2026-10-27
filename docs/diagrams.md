@@ -22,7 +22,7 @@ Node 22.12+ and macOS or Linux are required. Linux also needs the runtime's bubb
 
 ## Delivery and checks
 
-Recto copies referenced SVGs into `output/media/`. Tutor additionally preserves native regeneration sources in `output/figures/`, so the delivery remains Markdown, Typst, PDF, media, and figure sources without duplicating assets. After export, rebuild from `output/` as documented in [export.md](export.md) and inspect each PDF page as images, not only extractable text. Check gate connections, truth-table values, labels, overbars, arrows, crop margins, and font substitution.
+Recto copies referenced SVGs into `output/media/`. Tutor additionally preserves native regeneration sources in `output/figures/`, so the delivery remains Markdown, Typst, PDF, media, and figure sources without duplicating assets. Export checks its host-owned asset copies and rejects symbolic links, including a linked `media/` or `figures/` root. After export, rebuild from `output/` as documented in [export.md](export.md) and inspect each PDF page as images, not only extractable text. Check gate connections, truth-table values, labels, overbars, arrows, crop margins, and font substitution.
 
 Generation, compilation, or embedding failure retains the reported `.lecture-*` source/assets or `.export-*` partial export. The previously published `output/` is not replaced. A successful tool return is not visual acceptance; the model must inspect the rendered preview and cite redrawn source pages, labeling added views.
 

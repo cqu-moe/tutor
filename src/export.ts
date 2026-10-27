@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, cp, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Lecture } from "./lecture-state.ts";
@@ -27,6 +27,18 @@ export async function exportLecture(courseDir: string, source: string, lecture: 
     await cp(path.join(path.dirname(source), "figures"), path.join(next, "figures"), { recursive: true, force: false }).catch((error) => {
       if (error.code !== "ENOENT") throw error;
     });
+    // Inspect the host-owned copies so model processes cannot race this check.
+    for (const directory of [path.join(stage, "media"), path.join(next, "figures")]) {
+      const entry = await lstat(directory).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+        return undefined;
+      });
+      if (!entry) continue;
+      if (entry.isSymbolicLink() || (entry.isDirectory()
+        && (await readdir(directory, { recursive: true, withFileTypes: true })).some((file) => file.isSymbolicLink()))) {
+        throw new Error("Lecture assets must not contain symbolic links");
+      }
+    }
     await execute(python, [path.join(rectoRoot, "scripts/export.py"), normalized,
       "--style", "reference", "--formats", "typ,pdf", "--output", next], { maxBuffer: 32 * 1024 * 1024 });
     for (const file of ["content.md", "document.pdf", "typst/document.typ"]) await access(path.join(next, file));

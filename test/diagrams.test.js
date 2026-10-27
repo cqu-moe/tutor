@@ -90,6 +90,7 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
     const completed = messages.filter((message) => message.role === "tool").length;
     if (mode.startsWith("outside-")) {
       if (completed && mode === "outside-final-write") return sse(response, { content: "# Overwritten published lecture\n\n<div>Force export failure</div>" });
+      if (completed && mode.startsWith("outside-asset")) return sse(response, { content: "# Candidate lecture\n\nA normal paragraph." });
       if (completed) return response.writeHead(401).end(JSON.stringify({ error: { message: "fixture stops after the attempted write" } }));
       const target = path.join(courseDir, "output", "content.md");
       const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -99,6 +100,11 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
         command = `ln ${mode === "outside-symlink" ? "-s " : ""}${quote(target)} ${quote(alias)} && printf overwritten > ${quote(alias)}`;
       }
       if (mode === "outside-final-write") command = `ln -s ${quote(target)} ${quote(path.join(stage, "content.md"))}`;
+      if (mode === "outside-asset-root") command = `ln -s ${quote(output)} ${quote(path.join(stage, "figures"))}`;
+      if (mode === "outside-asset-file" || mode === "outside-asset-media") {
+        const directory = path.join(stage, mode === "outside-asset-file" ? "figures" : "media");
+        command = `mkdir -p ${quote(directory)} && ln -s ${quote(target)} ${quote(path.join(directory, "alias"))}`;
+      }
       const escape = mode === "outside-write"
         ? call("write", { path: target, content: "overwritten outside the stage" })
         : call("bash", { command });
@@ -212,11 +218,12 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
 
   const goodFiles = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg|py|json)$/.test(file));
   const goodBytes = await Promise.all(goodFiles.map((file) => readFile(path.join(output, file))));
-  for (const attempt of ["outside-write", "outside-bash", "outside-symlink", "outside-hardlink", "outside-final-write"]) {
+  for (const attempt of ["outside-write", "outside-bash", "outside-symlink", "outside-hardlink", "outside-final-write", "outside-asset-file", "outside-asset-root", "outside-asset-media"]) {
     mode = attempt;
     stage = undefined;
     const rejected = await runCli(common, "", env);
     assert.equal(rejected.code, 1);
+    if (attempt.startsWith("outside-asset")) assert.match(rejected.stderr, /assets must not contain symbolic links/);
     for (const [index, file] of goodFiles.entries()) assert.ok((await readFile(path.join(output, file))).equals(goodBytes[index]), `${attempt} changed ${file}`);
   }
   mode = "late-error";
