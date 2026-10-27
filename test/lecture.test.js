@@ -150,8 +150,9 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
     assert.doesNotMatch(failed.stdout, /Lecture exported/);
     assert.match(failed.stderr, failure === "export-error" ? /Unsupported Div/ : /generation failed/);
     assert.deepEqual(await Promise.all(files.map((file) => readFile(path.join(output, file)))), good);
-    await readFile(path.join(courseDir, "parsed", "page-0001", "full.md"));
-    await readFile(path.join(courseDir, "source", "lecture.pdf"));
+    const context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+    await readFile(path.join(context.pages[0].parsedDirectory, "full.md"));
+    await readFile(context.pages[0].pagePdf);
   }
   const stages = (await readdir(courseDir)).filter((name) => name.startsWith(".lecture-"));
   const drafts = await Promise.all(stages.map((stage) => readFile(path.join(courseDir, stage, "content.md"), "utf8").catch(() => "")));

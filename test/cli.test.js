@@ -74,9 +74,11 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
   const zipBytes = await readFile(zip);
 
   const mineruRequests = [];
+  let mineruFileName = "page-0001.pdf";
   const mineru = createServer(async (request, response) => {
     if (request.method === "POST" && request.url === "/api/v4/file-urls/batch") {
       mineruRequests.push(JSON.parse(await body(request)));
+      mineruFileName = mineruRequests.at(-1).files[0].name;
       response.end(JSON.stringify({
         code: 0,
         data: {
@@ -97,7 +99,7 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
         data: {
           batch_id: "batch-1",
           extract_result: [{
-            file_name: "page-0001.pdf",
+            file_name: mineruFileName,
             state: "done",
             full_zip_url: `http://${mineruAddress.address}:${mineruAddress.port}/result.zip`,
           }],
