@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { responseBytes, safeReason, saveCache } from "./ocr.ts";
 import type { Input } from "./types.ts";
 
 const execute = promisify(execFile);
@@ -18,21 +19,41 @@ async function command(command: string, args: string[]) {
 async function jsonFetch(url: string, init: RequestInit, stage: string) {
   let response: Response;
   try {
-    response = await fetch(url, init);
+    response = await fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(30_000) });
   } catch {
     throw new Error(`MinerU ${stage} request failed`);
   }
   let payload: any;
   try {
-    payload = await response.json();
+    payload = JSON.parse((await responseBytes(response, 1024 * 1024)).toString("utf8"));
   } catch {
     throw new Error(`MinerU ${stage} returned an invalid response (HTTP ${response.status})`);
   }
-  if (!response.ok || payload.code !== 0) throw new Error(`MinerU ${stage} failed (HTTP ${response.status})`);
+  if (!response.ok || payload.code !== 0) throw new Error(`MinerU ${stage} failed (HTTP ${response.status}): ${safeReason(payload)}`);
   return payload;
 }
 
-export async function parseWithMinerU(inputs: Input[], baseUrl: string, token: string, courseDir: string) {
+async function safeUnzip(zip: string, output: string) {
+  const details = await command("/usr/bin/unzip", ["-Zl", zip]);
+  if (details.stdout.split("\n").some((line) => /^\s*l/.test(line))) throw new Error("MinerU result archive contains a symbolic link");
+  const listing = await command("/usr/bin/unzip", ["-Z1", zip]);
+  for (const entry of listing.stdout.split("\n")) {
+    if (!entry || entry.endsWith("/")) continue;
+    if (path.isAbsolute(entry) || entry.includes("\\") || entry.split("/").includes("..")) {
+      throw new Error("MinerU result archive contains an unsafe path");
+    }
+  }
+  await mkdir(output, { recursive: true });
+  await command("/usr/bin/unzip", ["-q", "-o", zip, "-d", output]);
+}
+
+async function failureReason(response: Response) {
+  const text = (await responseBytes(response, 64 * 1024)).toString("utf8");
+  const xml = text.match(/<Message>([\s\S]*?)<\/Message>/);
+  return safeReason(xml ? xml[1] : text);
+}
+
+export async function parseWithMinerU(inputs: Input[], baseUrl: string, token: string) {
   const created = await jsonFetch(`${baseUrl}/api/v4/file-urls/batch`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -47,8 +68,13 @@ export async function parseWithMinerU(inputs: Input[], baseUrl: string, token: s
   const urls = created.data.file_urls;
   if (urls?.length !== inputs.length) throw new Error("MinerU did not return one upload URL per file");
   for (const [index, input] of inputs.entries()) {
-    const upload = await fetch(urls[index], { method: "PUT", body: await readFile(input.uploadPath) });
-    if (!upload.ok) throw new Error(`MinerU upload failed for ${input.name} (HTTP ${upload.status})`);
+    let upload: Response;
+    try {
+      upload = await fetch(urls[index], { method: "PUT", body: await readFile(input.uploadPath), signal: AbortSignal.timeout(120_000) });
+    } catch {
+      throw new Error(`MinerU upload failed for ${input.name}: request failed or timed out after 120 seconds`);
+    }
+    if (!upload.ok) throw new Error(`MinerU upload failed for ${input.name} (HTTP ${upload.status}): ${await failureReason(upload)}`);
   }
 
   const deadline = Date.now() + 10 * 60 * 1000;
@@ -64,13 +90,23 @@ export async function parseWithMinerU(inputs: Input[], baseUrl: string, token: s
 
   for (const input of inputs) {
     const result = results.find((item: any) => item.file_name === input.name || item.data_id === input.name);
-    if (!result || result.state !== "done" || !result.full_zip_url) throw new Error(`MinerU parsing failed for ${input.name}`);
-    const zip = path.join(courseDir, "parsed", `${path.parse(input.name).name}.zip`);
-    const download = await fetch(result.full_zip_url);
-    if (!download.ok) throw new Error(`MinerU result download failed for ${input.name} (HTTP ${download.status})`);
-    await writeFile(zip, Buffer.from(await download.arrayBuffer()));
-    const output = path.join(courseDir, "parsed", path.parse(input.name).name);
+    if (!result || result.state !== "done" || !result.full_zip_url) {
+      throw new Error(`MinerU parsing failed for ${input.name}: ${safeReason({ message: result?.err_msg })}`);
+    }
+    let download: Response;
+    try {
+      download = await fetch(result.full_zip_url, { signal: AbortSignal.timeout(120_000) });
+    } catch {
+      throw new Error(`MinerU result download failed for ${input.name}: request failed or timed out after 120 seconds`);
+    }
+    if (!download.ok) throw new Error(`MinerU result download failed for ${input.name} (HTTP ${download.status}): ${await failureReason(download)}`);
+    const output = input.parsedDirectory!;
+    const zip = `${output}.zip`;
+    const partial = `${zip}.download`;
     await mkdir(output, { recursive: true });
-    await command("/usr/bin/unzip", ["-q", "-o", zip, "-d", output]);
+    await writeFile(partial, await responseBytes(download, 512 * 1024 * 1024));
+    await rename(partial, zip);
+    await safeUnzip(zip, output);
+    await saveCache(input, "mineru", "vlm", baseUrl);
   }
 }

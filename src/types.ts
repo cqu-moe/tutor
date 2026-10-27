@@ -4,6 +4,8 @@ export type Input = {
   kind: "pdf-page" | "screenshot";
   sourcePage?: number;
   image?: string;
+  contentHash: string;
+  parsedDirectory?: string;
 };
 
 export type Context = {
