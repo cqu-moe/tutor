@@ -43,6 +43,19 @@ export async function prepareMemory(courseDir: string) {
   };
 }
 
+function modelFailure(error: unknown): Error {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (message.startsWith("No API provider registered for api:")) {
+    return new Error("Pi response failed: unsupported model API protocol; check the provider api field in models.json.");
+  }
+  // Upstream bodies may echo command-resolved credentials; retain only a numeric status.
+  const status = message.match(/^(?:HTTP\s+)?([45]\d{2})(?:\D|$)/i)?.[1];
+  const hint = status === "401" || status === "403" ? "check model credentials and provider permissions"
+    : status === "429" ? "check model provider quota and rate limits"
+      : "check provider availability, endpoint, model and API protocol in models.json";
+  return new Error(`Pi response failed${status ? ` (HTTP ${status})` : ""}; ${hint}.`);
+}
+
 export async function promptWithMemory(session: AgentSession, prompt: string, options?: Parameters<AgentSession["prompt"]>[1]) {
   let failure: string | undefined;
   const recoveryIds: string[] = [];
@@ -56,9 +69,13 @@ export async function promptWithMemory(session: AgentSession, prompt: string, op
     }
   });
   try {
-    await session.prompt(prompt, options);
+    try {
+      await session.prompt(prompt, options);
+    } catch (error) {
+      throw modelFailure(error);
+    }
     if (failure) throw new Error(`learner memory operation failed (${failure}); saving/maintenance did not complete`);
-    if (session.agent.state.errorMessage) throw new Error(`Pi response failed: ${session.agent.state.errorMessage}`);
+    if (session.agent.state.errorMessage) throw modelFailure(session.agent.state.errorMessage);
     const last = session.messages.at(-1);
     if (last?.role !== "assistant") throw new Error("Pi response failed: no final answer");
     if (last.stopReason !== "stop") throw new Error(`Pi response failed: incomplete answer (${last.stopReason})`);

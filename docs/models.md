@@ -53,8 +53,10 @@ Unknown Pi API identifiers are reported as model configuration failures. Authent
 
 Pi resolves credentials from `auth.json`, provider configuration, or environment variables. Keep credentials in the selected Pi agent directory or process environment; do not put them in course directories or this repository.
 
-Model and OCR configuration are independent: `models.json` and `auth.json` control the tutor model, while `MINERU_API_TOKEN` controls MinerU parsing. Tutor redacts configured key, header, token, and sensitive environment values before printing diagnostics. A provider can still choose to echo unrecognized data in its error body, so avoid placing course material or unrelated secrets in model configuration.
+Model and OCR configuration are independent: `models.json` and `auth.json` control the tutor model, while `MINERU_API_TOKEN` controls MinerU parsing. Tutor redacts configured key, header, token, and sensitive environment values before printing diagnostics. Model request failures expose only a numeric HTTP status when available and fixed authentication, quota or configuration guidance. Arbitrary upstream error text is suppressed, including echoed command-resolved keys. Tutor does not execute credential commands again to collect values for redaction.
 
 ## Runtime contract
 
 Internal Tutor callers create sessions through `createTutorSession(courseDir, agentDir, model, options)` in `src/runtime.ts`. It resolves the default or explicit model, validates image capability, configures Pi resources, and returns an `AgentSession`. This keeps route proposal and later lecture-generation phases on the same model and authentication path.
+
+Run prompts through `promptWithMemory(session, prompt, options)` from `src/memory.ts` to get the final answer only after normal completion and successful memory tools. The helper also supplies safe model failure diagnostics and any Recovery IDs from successful deletions preceding a failed operation. Lecture and later tutoring callers must use it instead of exposing raw SDK errors or partial responses.

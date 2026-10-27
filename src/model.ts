@@ -42,8 +42,7 @@ export async function proposeRoute(context: Context, courseDir: string, agentDir
     output = await promptWithMemory(session, ask, { images });
     process.stdout.write(output);
     if (!output.trim()) {
-      const failure = session.agent.state.errorMessage ?? "the model returned no route";
-      throw new Error(`Pi route generation failed: ${failure}`);
+      throw new Error("Pi route generation failed: the model returned no route");
     }
 
     process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
@@ -70,9 +69,8 @@ export async function proposeRoute(context: Context, courseDir: string, agentDir
       output = await promptWithMemory(session, `Adjust this teaching route. Record any explicit learner feedback before responding. Return the complete revised route.\n\nCurrent route:\n${current}\n\nUser adjustment: ${line}`);
       process.stdout.write(output);
       if (!output.trim()) {
-        const failure = session.agent.state.errorMessage ?? "the model returned no revised route";
         lines.close();
-        throw new Error(`Pi route adjustment failed: ${failure}`);
+        throw new Error("Pi route adjustment failed: the model returned no revised route");
       }
       process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
     }
