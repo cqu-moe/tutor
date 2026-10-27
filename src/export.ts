@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -16,7 +16,14 @@ export async function exportLecture(courseDir: string, source: string) {
   try {
     const python = process.env.TUTOR_PYTHON ?? "python3";
     await execute(python, [path.join(rectoRoot, "scripts/doctor.py"), "--style", "reference"]);
-    await execute(python, [path.join(rectoRoot, "scripts/export.py"), source,
+    const normalized = path.join(stage, "content.md");
+    // Normalize standard math delimiters through Pandoc, preserving semantic content.
+    await execute("pandoc", [source, "-f", "markdown+tex_math_single_backslash", "-t", "markdown",
+      "--standalone", "--wrap=none", "-o", normalized]);
+    await cp(path.join(path.dirname(source), "media"), path.join(stage, "media"), { recursive: true }).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    await execute(python, [path.join(rectoRoot, "scripts/export.py"), normalized,
       "--style", "reference", "--formats", "typ,pdf", "--output", next], { maxBuffer: 32 * 1024 * 1024 });
     for (const file of ["content.md", "document.pdf", "typst/document.typ"]) await access(path.join(next, file));
     await mkdir(path.join(next, "media"), { recursive: true });
@@ -36,7 +43,7 @@ export async function exportLecture(courseDir: string, source: string) {
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Recto export failed; source retained at ${source}; diagnostics in ${stage}: ${detail}`);
+    throw new Error(`Recto export failed; source retained at ${source}; partial export in ${stage}: ${detail}`);
   }
   await rm(stage, { recursive: true, force: true }).catch(() => {
     console.warn(`Export succeeded; temporary files remain at ${stage}`);

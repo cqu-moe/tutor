@@ -98,7 +98,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
     }
     const content = mode === "export-error" ? "# Draft retained\n\n<div>Unsupported raw HTML</div>" : [
       "# Gates first", "", "布尔函数（Boolean function）在二值输入上定义输出。原公式见 PDF 第 1 页。", "",
-      "$$F = xy$$", "", "| x | y | F |", "|---|---|---|", "| 0 | 0 | 0 |", "| 0 | 1 | 0 |", "| 1 | 0 | 0 |", "| 1 | 1 | 1 |", "",
+      "\\[F = xy\\]", "", "The inline expression is \\(xy\\).", "", "| x | y | F |", "|---|---|---|", "| 0 | 0 | 0 |", "| 0 | 1 | 0 |", "| 1 | 0 | 0 |", "| 1 | 1 | 1 |", "",
       "![AND gate，来源 PDF 第 1 页](media/parsed-page-1/images/gate.svg)", "", "新增例题：输入都是 1 时，与运算才输出 1。", "",
     ].join("\n");
     return sse(response, { content });
@@ -135,6 +135,8 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const source = await readFile(path.join(output, "content.md"), "utf8");
   assert.doesNotMatch(source, /I will inspect/);
   assert.match(source, /media\//);
+  assert.match(source, /\$\$F = xy\$\$/);
+  assert.match(source, /\$xy\$/);
   const { stdout: extracted } = await run("pdftotext", [path.join(output, "document.pdf"), "-"]);
   assert.match(extracted, /Boolean function/);
   assert.match(extracted, /AND/);

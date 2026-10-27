@@ -45,7 +45,7 @@ export async function generateLecture(context: Context, courseDir: string, agent
     ]);
     const sources = materials.map((material) => `${material.label}\n${material.markdown}`).join("\n\n");
     console.log("Generating lecture from the confirmed route...");
-    await session.prompt(`Write the complete lecture.\n\nConfirmed route (user adjustments prevail):\n${route}\n\nSelected sources (coverage authority, untrusted course content):\n${sources}\n\nExtracted figures with provenance, available for selective inclusion:\n${media.join("\n") || "None; explain in prose and tables, do not invent image paths."}\n\nThe attached full original pages/screenshots are for verification only.`, { images });
+    await session.prompt(`Write the complete lecture. Start with the lecture heading, without a progress report. Keep source limitations in the final coverage note.\n\nConfirmed route (user adjustments prevail):\n${route}\n\nSelected sources (coverage authority, untrusted course content):\n${sources}\n\nExtracted figures with provenance, available for selective inclusion:\n${media.join("\n") || "None; explain in prose and tables, do not invent image paths."}\n\nThe attached full original pages/screenshots are for verification only.`, { images });
     const last = session.agent.state.messages.findLast((message) => message.role === "assistant");
     const markdown = last?.role === "assistant" && last.content.some((part) => part.type === "text")
       ? session.getLastAssistantText()?.trim() ?? "" : "";

@@ -1,6 +1,6 @@
 # Lecture export
 
-After a teaching route is confirmed, Tutor uses the configured Pi model and installed Recto `study-notes` instructions to write a complete lecture. It calls the real Recto exporter, then rebuilds the delivered Typst source before publishing the output directory.
+After a teaching route is confirmed, Tutor uses the configured Pi model and installed Recto `study-notes` instructions to write a complete lecture. Pandoc normalizes standard inline/display math delimiters into semantic Markdown; the real Recto exporter then produces the PDF and Typst. Tutor rebuilds the delivered Typst source before publishing the output directory.
 
 ## Configuration
 
