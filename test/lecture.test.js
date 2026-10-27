@@ -71,6 +71,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
       "#pagebreak()",
       "= Chapter One",
       "Boolean function",
+      "== Detail",
       "#pagebreak()",
       "= Chapter Two",
       "Complement of a function",
@@ -244,4 +245,17 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.doesNotMatch(lastPrompt, /do not cover end of PDF/);
   const lastContext = JSON.parse(await readFile(path.join(lastChapterDataDir, "digital-design", "context.json"), "utf8"));
   assert.equal(lastContext.selection.endHeading, null);
+
+  const nestedDataDir = path.join(root, "nested-chapter-data");
+  const nestedChapter = await runCli([
+    "--course", "Digital Design", "--data-dir", nestedDataDir, "--agent-dir", agentDir,
+    "--model", "tutorTest/lecture-model", "--pdf", pdf, "--chapter", "Detail",
+    "--screenshots", path.join(root, "screenshot.jpg"), "--mineru-base-url", ocr,
+  ], "", env);
+  assert.equal(nestedChapter.code, 0, nestedChapter.stderr);
+  const nestedContext = JSON.parse(await readFile(path.join(nestedDataDir, "digital-design", "context.json"), "utf8"));
+  assert.equal(nestedContext.selection.title, "Detail");
+  assert.equal(nestedContext.selection.startPage, 2);
+  assert.equal(nestedContext.selection.endHeading, "Chapter Two");
+  assert.equal(nestedContext.selection.endPage, 3);
 });

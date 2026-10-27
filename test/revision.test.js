@@ -75,6 +75,14 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   await writeFile(path.join(courseDir, "route.md"), "## Route\n1. Boolean functions\n2. OR gates\n");
   await writeFile(path.join(courseDir, "context.json"), JSON.stringify({
     course: "Digital Design",
+    selection: {
+      type: "chapter",
+      title: "Chapter One",
+      startHeading: "Chapter One",
+      startPage: 21,
+      endHeading: "Chapter Two",
+      endPage: 22,
+    },
     confirmedAt: "2026-01-01T00:00:00.000Z",
     pages: [{
       sourcePage: 21,
@@ -91,9 +99,10 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   await writeFile(path.join(output, "figures", "gate-source.typ"), figureSource);
   const lecture = [
     "# Boolean logic", "", "## Boolean functions", "",
-    "Original explanation. The formula needs both inputs at 1. Source: PDF page 21.", "",
+    "Original explanation. The formula needs both inputs at 1. 来源：PDF 第 21 页。", "",
     "$$F = xy$$", "", "Derivation: none.", "", "## OR gates", "",
     "OR outputs 1 unless both inputs are 0. Source: PDF page 22.", "",
+    "Coverage: 来源：PDF 第 21–24 页。", "",
     "![AND gate, source PDF page 21](media/gate.svg)", "", "## Examples", "",
     "Original example: compute F when x=1 and y=1.", "",
   ].join("\n");
@@ -145,8 +154,24 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   assert.match(unsafeSession.stderr, /stay inside \.sessions/);
   await rm(path.join(courseDir, "revision-session.json"));
 
+  const citationFeedback = "Re-explain Boolean functions";
+  replacements.set(citationFeedback, { oldText: "来源：PDF 第 21 页。", newText: "" });
+  const citation = await runCli([...common, "--revise", citationFeedback], env);
+  assert.equal(citation.code, 1, "Unrequested Chinese source-citation removal must fail");
+  assert.match(citation.stderr, /revision would remove source citations: PDF 第 21 页/);
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), lecture);
+
+  const rangeFeedback = "Condense the source coverage note";
+  replacements.set(rangeFeedback, { oldText: "Coverage: 来源：PDF 第 21–24 页。", newText: "" });
+  const range = await runCli([...common, "--revise", rangeFeedback], env);
+  assert.equal(range.code, 1, "Unrequested Chinese source-range removal must fail");
+  assert.match(range.stderr, /revision would remove source citations: PDF 第 21–24 页/);
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), lecture);
+
   for (const feedback of replacements.keys()) {
     if (feedback === "Break export") continue;
+    if (feedback === citationFeedback) continue;
+    if (feedback === rangeFeedback) continue;
     const revised = await runCli([...common, "--revise", feedback], env);
     assert.equal(revised.code, 0, revised.stderr);
     assert.match(revised.stdout, /Lecture revised/);
@@ -157,12 +182,27 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   assert.match(source, /Replacement example/);
   assert.match(source, /OR outputs 1 unless both inputs are 0\. Source: PDF page 22\./);
   assert.match(source, /media\/[^)]*gate\.svg/);
-  assert.match(source, /PDF page 21/);
+  assert.match(source, /来源：PDF 第 21 页。/);
+  assert.match(source, /来源：PDF 第 21(?:–|--)24 页。/);
   const mediaFile = (await readdir(path.join(output, "media"), { recursive: true })).find((file) => file.endsWith("gate.svg"));
   assert.equal(await readFile(path.join(output, "media", mediaFile), "utf8"), gate);
   assert.equal(await readFile(path.join(output, "figures", "gate-source.typ"), "utf8"), figureSource);
-  assert.match(JSON.stringify(requests[2].messages), /Rewrite the Boolean functions section/);
-  assert.match(JSON.stringify(requests[4].messages), /Add the missing derivation/);
+  const promptFor = (feedback) => {
+    const payload = requests.findLast((payload) => {
+      const message = payload.messages.findLast((message) => message.role === "user");
+      return message !== undefined && userText(message).includes(feedback);
+    });
+    assert.ok(payload, `missing revision request: ${feedback}`);
+    return userText(payload.messages.findLast((message) => message.role === "user"));
+  };
+  const currentPrompt = promptFor(citationFeedback);
+  const reopenedPrompt = promptFor("Add the missing derivation");
+  assert.match(currentPrompt, /Re-explain Boolean functions/);
+  assert.match(reopenedPrompt, /Add the missing derivation/);
+  assert.match(currentPrompt, /Requested chapter: Chapter One/);
+  assert.match(currentPrompt, /do not cover Chapter Two/);
+  assert.match(reopenedPrompt, /Requested chapter: Chapter One/);
+  assert.match(reopenedPrompt, /do not cover Chapter Two/);
 
   const ordered = await readFile(path.join(output, "content.md"), "utf8");
   const examplesStart = ordered.indexOf("## Examples");

@@ -2,6 +2,7 @@ import { copyFile, cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { promptWithMemory } from "./memory.ts";
+import { selectionScope } from "./selection.ts";
 import { createTutorSession, imageContent } from "./runtime.ts";
 import type { Context } from "./types.ts";
 
@@ -42,7 +43,7 @@ function preservesOriginal(original: string, revised: string) {
   const checks: Array<[name: string, pattern: RegExp]> = [
     ["section headings", /^#{1,6}\s+(.+?)\s*#*$/gm],
     ["media references", /!\[[^\]]*\]\((media\/[^)\s]+)\)/g],
-    ["source citations", /((?:PDF page|Screenshot)[^\n.!;]*)/gi],
+    ["source citations", /((?:PDF page|Screenshot|PDF\s*第\s*\d+(?:\s*[-–—,，、]+\s*\d+)*\s*页)[^\n.!;]*)/gi],
   ];
   if (JSON.stringify(headingSequence(original)) !== JSON.stringify(headingSequence(revised))) {
     return "revision would change teaching route order; confirm a new teaching route first";
@@ -111,7 +112,7 @@ export async function reviseLecture(
       ...context.screenshots.map((screenshot) => `Screenshot ${screenshot.name}\n${screenshot.markdown}`),
     ].join("\n\n");
     console.log("Revising lecture with targeted edits...");
-    await promptWithMemory(session, `Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n\nConfirmed route:\n${await readFile(path.join(courseDir, "route.md"), "utf8")}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, { images });
+    await promptWithMemory(session, `Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n${selectionScope(context.selection)}\nConfirmed route:\n${await readFile(path.join(courseDir, "route.md"), "utf8")}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, { images });
     const revised = await readFile(source, "utf8");
     if (toolFailed || revised === original) {
       throw new Error(toolFailed ? "the revision tool failed" : "the model did not change the staged lecture");
