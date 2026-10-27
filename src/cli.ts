@@ -5,6 +5,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { promisify } from "node:util";
 import { hashFile, uncachedInputs, type OcrProvider } from "./ocr.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseWithMinerU } from "./mineru.ts";
 import { parseWithMistral } from "./mistral.ts";
 import { proposeRoute } from "./model.ts";
@@ -133,6 +134,54 @@ async function buildContext(course: string, inputs: Input[], courseDir: string):
   return context;
 }
 
+let agentDirForDiagnostics: string | undefined;
+
+function addConfiguredSecret(secrets: string[], value: unknown) {
+  if (typeof value !== "string" || !value || value.startsWith("$!") || value.startsWith("$$")) return;
+  if (value.startsWith("$")) {
+    for (const [, braced, plain] of value.matchAll(/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g)) {
+      const secret = process.env[braced ?? plain];
+      if (secret) secrets.push(secret);
+    }
+    return;
+  }
+  secrets.push(value);
+}
+
+function collectSecrets(value: unknown, secrets: string[]) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectSecrets(item, secrets);
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  for (const [key, item] of Object.entries(value)) {
+    if (["apiKey", "key", "token", "access", "refresh", "accessToken", "refreshToken", "authorization"].includes(key)) {
+      addConfiguredSecret(secrets, item);
+    }
+    if (key === "headers" && typeof item === "object" && item !== null) {
+      for (const header of Object.values(item)) addConfiguredSecret(secrets, header);
+    }
+    if (key === "env" && typeof item === "object" && item !== null) {
+      for (const secret of Object.values(item)) if (typeof secret === "string") secrets.push(secret);
+    }
+    collectSecrets(item, secrets);
+  }
+}
+
+async function redactedMessage(raw: string, agentDir: string | undefined) {
+  const secrets = Object.entries(process.env)
+    .filter(([name, value]) => /(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)$/i.test(name) && value)
+    .map(([, value]) => value!);
+  for (const file of ["models.json", "auth.json"]) {
+    try {
+      collectSecrets(JSON.parse(await readFile(path.join(agentDir ?? "", file), "utf8")), secrets);
+    } catch {
+      // Missing or invalid model configuration must not hide the original error.
+    }
+  }
+  return secrets.reduce((message, secret) => message.split(secret).join("[redacted]"), raw);
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -148,6 +197,7 @@ async function main() {
       "mistral-base-url": { type: "string", default: "https://api.mistral.ai" },
     },
   });
+  agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
   if (!values.course) throw new Error("--course is required");
   if (!values.pdf) throw new Error("--pdf is required");
   if (!values.pages) throw new Error("--pages is required");
@@ -191,9 +241,8 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  const secrets = [process.env.MINERU_API_TOKEN, process.env.MISTRAL_API_KEY].filter(Boolean);
   const raw = error instanceof Error ? error.message : String(error);
-  const message = secrets.reduce((text, secret) => text.split(secret!).join("[redacted]"), raw);
+  const message = await redactedMessage(raw, agentDirForDiagnostics);
   console.error(`tutor: ${message}`);
   process.exitCode = 1;
 }
