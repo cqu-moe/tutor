@@ -24,7 +24,7 @@ export async function createTutorSession(
   courseDir: string,
   agentDir: string | undefined,
   model: string | undefined,
-  options?: { systemPrompt?: string; tools?: string[] },
+  options?: { systemPrompt?: string; tools?: string[]; sessionManager?: SessionManager },
 ): Promise<AgentSession> {
   const effectiveAgentDir = agentDir ?? getAgentDir();
   const modelRuntime = await ModelRuntime.create({
@@ -59,7 +59,7 @@ export async function createTutorSession(
     model: requested.model,
     tools: [...(options?.tools ?? ["read", "bash", "edit", "write"]), ...memoryTools],
     resourceLoader,
-    sessionManager: SessionManager.inMemory(),
+    sessionManager: options?.sessionManager ?? SessionManager.inMemory(),
   });
   return session;
 }

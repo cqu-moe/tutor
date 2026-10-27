@@ -23,6 +23,9 @@ export async function exportLecture(courseDir: string, source: string) {
     await cp(path.join(path.dirname(source), "media"), path.join(stage, "media"), { recursive: true }).catch((error) => {
       if (error.code !== "ENOENT") throw error;
     });
+    await cp(path.join(path.dirname(source), "figures"), path.join(next, "figures"), { recursive: true, force: false }).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
     await execute(python, [path.join(rectoRoot, "scripts/export.py"), normalized,
       "--style", "reference", "--formats", "typ,pdf", "--output", next], { maxBuffer: 32 * 1024 * 1024 });
     for (const file of ["content.md", "document.pdf", "typst/document.typ"]) await access(path.join(next, file));

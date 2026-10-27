@@ -43,6 +43,11 @@ function sse(response, delta, finish = "stop") {
   ].join("\n\n"));
 }
 
+function userText(message) {
+  if (typeof message.content === "string") return message.content;
+  return message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+}
+
 async function serve(t, handler) {
   const server = createServer(handler);
   await new Promise((resolve, reject) => {
@@ -85,6 +90,18 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const model = await serve(t, async (request, response) => {
     const payload = await body(request);
     const messages = JSON.stringify(payload.messages);
+    const prompt = userText(payload.messages.findLast((message) => message.role === "user"));
+    if (prompt.includes("Edit exactly .revision-")) {
+      if (payload.messages.at(-1)?.role === "tool") return sse(response, { content: "Revision complete." });
+      const source = prompt.match(/\.revision-[^\s]+\/content\.md/)?.[0];
+      return sse(response, {
+        content: "I will make the targeted edit.",
+        tool_calls: [{ index: 0, id: "edit-source", type: "function", function: { name: "edit", arguments: JSON.stringify({ path: source, edits: [{
+          oldText: "新增例题：输入都是 1 时，与运算才输出 1。",
+          newText: "补充推导：先固定 x=1、y=1，再检查与运算条件。\n\n新增例题：输入都是 1 时，与运算才输出 1。",
+        }] }) } }],
+      }, "tool_calls");
+    }
     if (messages.includes("Learner memory request:")) {
       if (payload.messages.at(-1).role === "tool") return sse(response, { content: String(payload.messages.at(-1).content) });
       return sse(response, { tool_calls: [{ index: 0, id: "read-memory", type: "function", function: {
@@ -132,9 +149,10 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.match(denied.stderr, /Confirm the teaching route/);
   assert.equal(lectureRequests.length, 0, "unconfirmed material must never reach generation");
 
-  const confirmed = await runCli(args, "Start with gates\nconfirm\n", env);
+  const confirmed = await runCli(args, "Start with gates\nconfirm\nAdd the missing derivation\ndone\n", env);
   assert.equal(confirmed.code, 0, confirmed.stderr);
   assert.match(confirmed.stdout, /Lecture exported/);
+  assert.match(confirmed.stdout, /Lecture revised/);
   const prompt = JSON.stringify(lectureRequests[0].messages);
   assert.match(prompt, /Gates first; Boolean functions second/);
   assert.match(prompt, /AND truth table/);
@@ -146,6 +164,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.match(source, /media\//);
   assert.match(source, /\$\$F = xy\$\$/);
   assert.match(source, /\$xy\$/);
+  assert.match(source, /补充推导：先固定 x=1、y=1/);
   const { stdout: extracted } = await run("pdftotext", [path.join(output, "document.pdf"), "-"]);
   assert.match(extracted, /Boolean function/);
   assert.match(extracted, /AND/);

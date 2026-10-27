@@ -10,9 +10,10 @@ import { exportLecture } from "./export.ts";
 import { generateLecture } from "./lecture.ts";
 import { parseWithMinerU } from "./mineru.ts";
 import { parseWithMistral } from "./mistral.ts";
-import { proposeRoute } from "./model.ts";
+import { createTerminalInput, proposeRoute } from "./model.ts";
 import { createTutorSession } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
+import { reviseLecture } from "./revision.ts";
 import type { Context, Input } from "./types.ts";
 
 const execute = promisify(execFile);
@@ -196,6 +197,7 @@ async function main() {
       model: { type: "string" },
       memory: { type: "string" },
       generate: { type: "boolean" },
+      revise: { type: "string" },
       ocr: { type: "string", default: "mineru" },
       "mineru-base-url": { type: "string", default: "https://mineru.net" },
       "mistral-base-url": { type: "string", default: "https://api.mistral.ai" },
@@ -204,6 +206,14 @@ async function main() {
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
   if (!values.course) throw new Error("--course is required");
   const courseDir = await courseDirectory(values.course, values["data-dir"]!);
+  if (values.revise) {
+    if (values.generate || values.memory !== undefined || values.pdf || values.pages || values.screenshots) {
+      throw new Error("--revise uses the saved confirmed lecture; omit import, --generate, and --memory options");
+    }
+    const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+    await deliverRevision(context, courseDir, values["agent-dir"], values.model, values.revise);
+    return;
+  }
   if (values.memory !== undefined) {
     if (!values.memory.trim()) throw new Error("--memory requires a learner-memory request");
     await mkdir(courseDir, { recursive: true });
@@ -256,9 +266,21 @@ async function main() {
     }
   }
   const context = await buildContext(values.course, inputs, courseDir);
-  await proposeRoute(context, courseDir, values["agent-dir"], values.model);
-  if (context.confirmedAt) {
+  const input = createTerminalInput();
+  try {
+    await proposeRoute(context, courseDir, values["agent-dir"], values.model, input);
+    if (!context.confirmedAt) return;
     await deliverLecture(context, courseDir, values["agent-dir"], values.model);
+    process.stdout.write("\nType revision feedback, or type 'done' to finish.\n> ");
+    for (;;) {
+      const line = await input.nextLine();
+      if (line === undefined || line.trim().toLowerCase() === "done") break;
+      if (!line.trim()) continue;
+      await deliverRevision(context, courseDir, values["agent-dir"], values.model, line);
+      process.stdout.write("\nType revision feedback, or type 'done' to finish.\n> ");
+    }
+  } finally {
+    input.close();
   }
 }
 
@@ -269,6 +291,15 @@ async function deliverLecture(context: Context, courseDir: string, agentDir: str
     console.warn(`Export succeeded; generation draft remains at ${source}`);
   });
   console.log(`Lecture exported: ${output} (content.md, typst/document.typ, document.pdf, media/)`);
+}
+
+async function deliverRevision(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined, feedback: string) {
+  const source = await reviseLecture(context, courseDir, agentDir, model, feedback);
+  const output = await exportLecture(courseDir, source);
+  await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
+    console.warn(`Revision exported; draft remains at ${source}`);
+  });
+  console.log(`Lecture revised: ${output} (content.md, typst/document.typ, document.pdf, media/)`);
 }
 
 try {
