@@ -110,7 +110,7 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   }
   const memory = (course, question, responses = [read, echo], taskEnv = env, root = dataDir) =>
     invoke([...args(course, root), "--memory", question], responses, "", taskEnv);
-  const route = (course, responses, input = "confirm\n") => invoke([
+  const route = (course, responses, input = "") => invoke([
     ...args(course), "--pdf", pdf, "--pages", "1", "--mineru-base-url", ocrUrl,
   ], responses, input);
 
@@ -118,12 +118,12 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   assert.match(await memory("Digital Design", "Show current learner memory"), /empty or does not exist/);
 
   await route("Digital Design", [say("## Route\nBoolean basics"), write(preference), write(progress), write(weakness), say("## Revised route\nGates, with De Morgan practice")],
-    "Detailed derivations work best across courses. I already learned Boolean basics. In the optional exercise I swapped De Morgan variables twice.\nconfirm\n");
+    "Detailed derivations work best across courses. I already learned Boolean basics. In the optional exercise I swapped De Morgan variables twice.\n");
   const recalled = await memory("Digital Design", "Show current learner memory");
   for (const fact of [progress, preference, weakness]) assert.ok(recalled.includes(fact), recalled);
 
   await memory("Calculus", "I already learned Boolean basics in a prerequisite", [write(otherProgress), echo]);
-  await route("Calculus", [read, say("## Calculus route\nLimits"), say("## Current request\nOne compact example")], "Only for this route use one compact example\nconfirm\n");
+  await route("Calculus", [read, say("## Calculus route\nLimits"), say("## Current request\nOne compact example")], "Only for this route use one compact example\n");
   const context = requests[0].messages.filter((m) => m.role === "system" || m.role === "developer").map((m) => m.content).join("\n");
   assert.match(context, /\[\[course:calculus\]\]/);
   assert.ok(context.includes(progress) && context.includes(preference));
@@ -132,7 +132,7 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   assert.match(context, /Status: pending verification/);
   assert.match(context, /No learner feedback means no memory write/);
   assert.match(context, /Ground claims in supplied course material/);
-  assert.match(await readFile(path.join(dataDir, "calculus", "route.md"), "utf8"), /One compact example/);
+  assert.match(await readFile(path.join(dataDir, "calculus", "route-draft.md"), "utf8"), /One compact example/);
   const beforeMaintenance = await memory("Digital Design", "Show current learner memory");
   assert.ok(beforeMaintenance.includes(preference) && beforeMaintenance.includes(progress));
   const uploadsBeforeMaintenance = uploads;

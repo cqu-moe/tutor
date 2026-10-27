@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { access, copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { promisify } from "node:util";
 import { hashFile, readOcrResult, uncachedInputs, type OcrProvider } from "./ocr.ts";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { exportLecture } from "./export.ts";
+import { generateLecture } from "./lecture.ts";
 import { parseWithMinerU } from "./mineru.ts";
 import { parseWithMistral } from "./mistral.ts";
 import { proposeRoute } from "./model.ts";
@@ -193,6 +195,7 @@ async function main() {
       "agent-dir": { type: "string" },
       model: { type: "string" },
       memory: { type: "string" },
+      generate: { type: "boolean" },
       ocr: { type: "string", default: "mineru" },
       "mineru-base-url": { type: "string", default: "https://mineru.net" },
       "mistral-base-url": { type: "string", default: "https://api.mistral.ai" },
@@ -210,6 +213,12 @@ async function main() {
     } finally {
       session.dispose();
     }
+    return;
+  }
+  if (values.generate) {
+    if (values.pdf || values.pages || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
+    const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+    await deliverLecture(context, courseDir, values["agent-dir"], values.model);
     return;
   }
   if (!values.pdf) throw new Error("--pdf is required");
@@ -248,6 +257,18 @@ async function main() {
   }
   const context = await buildContext(values.course, inputs, courseDir);
   await proposeRoute(context, courseDir, values["agent-dir"], values.model);
+  if (context.confirmedAt) {
+    await deliverLecture(context, courseDir, values["agent-dir"], values.model);
+  }
+}
+
+async function deliverLecture(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined) {
+  const source = await generateLecture(context, courseDir, agentDir, model);
+  const output = await exportLecture(courseDir, source);
+  await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
+    console.warn(`Export succeeded; generation draft remains at ${source}`);
+  });
+  console.log(`Lecture exported: ${output} (content.md, typst/document.typ, document.pdf, media/)`);
 }
 
 try {
