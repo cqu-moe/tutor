@@ -149,9 +149,9 @@ test("default model receives original page and screenshot images", { timeout: 30
       "--data-dir", path.join(root, "data"),
       "--agent-dir", agentDir,
       "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`,
-    ], "confirm\n", { ...process.env, MINERU_API_TOKEN: "test-only-token", NO_COLOR: "1" });
+    ], "", { ...process.env, MINERU_API_TOKEN: "test-only-token", NO_COLOR: "1" });
 
-    assert.match(stdout, /Teaching route confirmed/);
+    assert.match(stdout, /Route was not confirmed/);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].model, "codex/gpt-6.1-sol");
     const images = requests[0].messages.at(-1).content.filter((part) => part.type === "image_url");

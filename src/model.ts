@@ -65,7 +65,7 @@ export async function proposeRoute(context: Context, courseDir: string, agentDir
       lines.close();
       await writeFile(path.join(courseDir, "context.json"), JSON.stringify(context, null, 2));
       await writeFile(path.join(courseDir, "route.md"), `${output.trim()}\n`);
-      process.stdout.write("Teaching route confirmed. Full lecture generation remains disabled until a later ticket.\n");
+      process.stdout.write("Teaching route confirmed.\n");
       session.dispose();
       return;
     }

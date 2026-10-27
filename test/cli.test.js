@@ -59,7 +59,7 @@ function sse(response, text) {
   response.end(`data: ${JSON.stringify(delta)}\n\ndata: ${JSON.stringify(end)}\n\ndata: [DONE]\n\n`);
 }
 
-test("CLI proposes, adjusts, and confirms a teaching route", { timeout: 30_000 }, async () => {
+test("CLI proposes and adjusts a teaching route without confirmation", { timeout: 30_000 }, async () => {
   const root = await mkdir(path.join(tmpdir(), `tutor-issue2-${Date.now()}`), { recursive: true });
   const pdf = path.join(root, "lecture.pdf");
   await writeFile(path.join(root, "lecture.typ"), "#set page(width: 2cm, height: 2cm)\nBoolean algebra\n");
@@ -148,7 +148,7 @@ test("CLI proposes, adjusts, and confirms a teaching route", { timeout: 30_000 }
       "--agent-dir", agentDir,
       "--model", "tutorTest/route-model",
       "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`,
-    ], "Put logic gates first\nconfirm\n", {
+    ], "Put logic gates first\n", {
       ...process.env,
       MINERU_API_TOKEN: "test-only-token",
       NO_COLOR: "1",
@@ -156,13 +156,13 @@ test("CLI proposes, adjusts, and confirms a teaching route", { timeout: 30_000 }
 
     assert.match(stdout, /## Proposed route/);
     assert.match(stdout, /## Adjusted route/);
-    assert.match(stdout, /Teaching route confirmed/);
+    assert.match(stdout, /Route was not confirmed/);
     assert.match(stdout, /Type an adjustment, or type 'confirm'/);
 
     const context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "context.json")));
     assert.equal(context.course, "Digital Design");
     assert.equal(context.pages[0].sourcePage, 1);
-    await assert.rejects(() => readFile(path.join(dataDir, "digital-design", "lecture.md")));
+    await assert.rejects(() => readFile(path.join(dataDir, "digital-design", "output", "content.md")));
 
     const unconfirmed = await runCli(cli, [
       "--course", "Digital Design",

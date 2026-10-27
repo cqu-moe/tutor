@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { promisify } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { exportLecture } from "./export.ts";
+import { generateLecture } from "./lecture.ts";
 import { parseWithMinerU } from "./mineru.ts";
 import { proposeRoute } from "./model.ts";
 import type { Context, Input } from "./types.ts";
@@ -172,11 +174,19 @@ async function main() {
       "data-dir": { type: "string", default: ".tutor" },
       "agent-dir": { type: "string" },
       model: { type: "string" },
+      generate: { type: "boolean" },
       "mineru-base-url": { type: "string", default: "https://mineru.net" },
     },
   });
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
   if (!values.course) throw new Error("--course is required");
+  const courseDir = await courseDirectory(values.course, values["data-dir"]!);
+  if (values.generate) {
+    if (values.pdf || values.pages || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
+    const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+    await deliverLecture(context, courseDir, values["agent-dir"], values.model);
+    return;
+  }
   if (!values.pdf) throw new Error("--pdf is required");
   if (!values.pages) throw new Error("--pages is required");
   const pages = parsePages(values.pages);
@@ -191,11 +201,22 @@ async function main() {
   const token = process.env.MINERU_API_TOKEN;
   if (!token) throw new Error("MINERU_API_TOKEN is required. MinerU's precision API uses a Bearer token.");
 
-  const courseDir = await courseDirectory(values.course, values["data-dir"]!);
   const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
   await parseWithMinerU(inputs, values["mineru-base-url"]!.replace(/\/$/, ""), token, courseDir);
   const context = await buildContext(values.course, inputs, courseDir);
   await proposeRoute(context, courseDir, values["agent-dir"], values.model);
+  if (context.confirmedAt) {
+    await deliverLecture(context, courseDir, values["agent-dir"], values.model);
+  }
+}
+
+async function deliverLecture(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined) {
+  const source = await generateLecture(context, courseDir, agentDir, model);
+  const output = await exportLecture(courseDir, source);
+  await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
+    console.warn(`Export succeeded; generation draft remains at ${source}`);
+  });
+  console.log(`Lecture exported: ${output} (content.md, typst/document.typ, document.pdf, media/)`);
 }
 
 try {
