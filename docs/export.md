@@ -7,6 +7,8 @@ After a teaching route is confirmed, Tutor uses the configured Pi model and inst
 - `TUTOR_RECTO_ROOT`: directory of the installed Recto **skill**, containing `scripts/doctor.py` and `scripts/export.py`. Tested against Recto 0.3.1; no scripts, templates, or fonts are vendored into Tutor.
 - `TUTOR_PYTHON`: optional path to a Python interpreter that passed Recto's dependency check. When omitted, Tutor uses `python3`.
 - `TUTOR_STUDY_NOTES`: optional path to the installed `study-notes/SKILL.md`. By default Tutor reads the sibling skill beside `TUTOR_RECTO_ROOT`.
+- `TUTOR_DIAGRAM_PYTHON`: Python interpreter with the pinned diagram dependencies in `requirements-diagrams.txt`; required for Schemdraw circuit generation.
+- `TUTOR_TYPST_PACKAGE_CACHE`: local Typst package cache containing or able to fetch the pinned CeTZ package.
 
 Recto 0.3.1 requires Python 3.10+, python-docx 1.2.x and lxml 5.x/6.x, Pandoc 3.9.0.2+, and Typst 0.15.1+. Run its `doctor.py --style reference` using your chosen interpreter. Use the desktop bundled Python when available; do not install globally. Pi remains pinned in the package lock.
 
@@ -16,10 +18,11 @@ Tutor exports the Markdown source through Recto's `reference` style to:
 output/content.md
 output/document.pdf
 output/media/
+output/figures/
 output/typst/document.typ
 ```
 
-The delivery has one Markdown source and one shared media directory. Original page images and screenshots are sent to the model for verification. OCR-extracted figures carry page/screenshot provenance and may be selected for the final lecture. Whole-page screenshots are not offered as final illustrations. New diagram generation and iterative revision are separate tickets.
+The delivery has one Markdown source, one shared media directory, native figure-regeneration sources, Typst, and PDF. Original page images and screenshots are sent to the model for verification. OCR-extracted figures carry page/screenshot provenance and may be selected for the final lecture. Whole-page screenshots are not offered as final illustrations. Generated static diagrams follow [diagrams.md](diagrams.md).
 
 Chinese is the default with English key terms retained on first use; current user adjustments prevail. The confirmed route controls order and explicit scope changes. Coverage is derived from every selected source, including details omitted by route headings. The lecture requests prerequisites, reasoning, worked examples, source citations, marked additions, and a coverage note. These instructions guide the model; they are not an automated proof of teaching quality. Recto's reference template uses Chinese typography; other-language typography needs separate visual verification.
 
@@ -47,6 +50,6 @@ PDF compilation alone does not replace visual inspection. Check rendered text, f
 
 ## Verification
 
-Set `TUTOR_RECTO_ROOT` (and `TUTOR_PYTHON` if needed), then run `npm test`. `test/lecture.test.js` invokes the actual bin, with model/OCR fixtures only at HTTP boundaries. It uses real Recto, Pandoc, and Typst; checks extractable PDF content, shared media, rebuilding, route adjustment, confirmation on restart, and failed export/model preservation. It fails with dependency guidance when Recto is not configured rather than silently skipping the export check. Other route/model tests stop before confirmation; this test owns confirmed generation.
+Set `TUTOR_RECTO_ROOT` and `TUTOR_PYTHON`, then run `npm test`. `test/lecture.test.js` invokes the actual bin, with model/OCR fixtures only at HTTP boundaries. It uses real Recto, Pandoc, and Typst; checks extractable PDF content, shared media, rebuilding, route adjustment, confirmation on restart, and failed export/model preservation. It fails with dependency guidance when Recto is not configured rather than silently skipping the export check. Other route/model tests stop before confirmation; `test/diagrams.test.js` additionally owns confirmed generated diagrams.
 
 Real provider evidence and private sample outputs belong outside the repository. Fixture tests do not prove model teaching quality or live OCR success. User evaluation of whether the lecture can replace the course slides remains separate.
