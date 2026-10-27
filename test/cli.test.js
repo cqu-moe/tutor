@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -185,4 +185,64 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
     await new Promise((resolve) => mineru.close(resolve));
     await new Promise((resolve) => model.close(resolve));
   }
+});
+
+test("CLI validates page ranges against the physical PDF without an arbitrary cap", { timeout: 30_000 }, async () => {
+  const root = await mkdir(path.join(tmpdir(), `tutor-page-ranges-${Date.now()}`), { recursive: true });
+  const pdf = path.join(root, "lecture.pdf");
+  await writeFile(path.join(root, "lecture.typ"), [
+    "#set page(width: 1cm, height: 1cm, margin: 2pt)",
+    "#for i in range(52) [",
+    "  Page #i",
+    "  #if i < 51 { pagebreak() }",
+    "]",
+  ].join("\n"));
+  await run("typst", ["compile", path.join(root, "lecture.typ"), pdf]);
+  const { stdout } = await run("pdfinfo", [pdf]);
+  const pageCount = Number(stdout.match(/^Pages:\s+(\d+)$/m)?.[1]);
+  assert.equal(pageCount, 52);
+
+  const dataDir = path.join(root, "data");
+  const courseDir = path.join(dataDir, "range-course");
+  const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
+  const env = { ...process.env, NO_COLOR: "1" };
+  delete env.MINERU_API_TOKEN;
+  const common = ["--course", "Range Course", "--pdf", pdf, "--data-dir", dataDir];
+
+  await assert.rejects(
+    () => runCli(cli, [...common, "--pages", `1-${pageCount}`], "", env),
+    /MINERU_API_TOKEN is required/,
+  );
+  assert.equal((await readdir(path.join(courseDir, "original-pages"))).filter((name) => name.endsWith(".pdf")).length, 52);
+
+  await assert.rejects(
+    () => runCli(cli, [...common, "--pages", `1-${Number.MAX_SAFE_INTEGER}`], "", env),
+    new RegExp(`--pages selects beyond the PDF, which has ${pageCount} pages`),
+  );
+  assert.equal((await readdir(path.join(courseDir, "original-pages"))).filter((name) => name.endsWith(".pdf")).length, 52);
+});
+
+test("CLI chapter selection reports unusable PDF bookmarks before services", { timeout: 30_000 }, async () => {
+  const root = await mkdir(path.join(tmpdir(), `tutor-chapter-errors-${Date.now()}`), { recursive: true });
+  const plain = path.join(root, "plain.pdf");
+  await writeFile(path.join(root, "plain.typ"), "#set page(width: 1cm, height: 1cm, margin: 2pt)\nPlain notes\n");
+  await run("typst", ["compile", path.join(root, "plain.typ"), plain]);
+  const repeated = path.join(root, "repeated.pdf");
+  await writeFile(path.join(root, "repeated.typ"), [
+    "#set page(width: 1cm, height: 1cm, margin: 2pt)",
+    "= Repeated\nFirst\n#pagebreak()\n= Unique\nMiddle\n#pagebreak()\n= Repeated\nLast",
+  ].join("\n"));
+  await run("typst", ["compile", path.join(root, "repeated.typ"), repeated]);
+
+  const cli = path.join(import.meta.dirname, "..", "bin", "tutor.js");
+  const env = { ...process.env, NO_COLOR: "1" };
+  delete env.MINERU_API_TOKEN;
+  await assert.rejects(
+    () => runCli(cli, ["--course", "Plain", "--pdf", plain, "--chapter", "Missing", "--data-dir", path.join(root, "data")], "", env),
+    /This PDF has no bookmarks; use --pages instead/,
+  );
+  await assert.rejects(
+    () => runCli(cli, ["--course", "Repeated", "--pdf", repeated, "--chapter", "Repeated", "--data-dir", path.join(root, "data")], "", env),
+    /PDF bookmark title is ambiguous: "Repeated" on page 1, "Repeated" on page 5; use --pages instead/,
+  );
 });

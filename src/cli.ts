@@ -14,43 +14,47 @@ import { createTerminalInput, proposeRoute } from "./model.ts";
 import { createTutorSession } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
 import { reviseLecture } from "./revision.ts";
-import type { Context, Input } from "./types.ts";
+import type { ChapterSelection, Context, Input } from "./types.ts";
 
 const execute = promisify(execFile);
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
-function parsePages(value: string | undefined): number[] {
+type PdfChapter = { title: string; page: number; level: number };
+
+function normalizedText(value: string) {
+  return value.trim().normalize("NFC");
+}
+
+function pageNumber(value: string) {
+  if (!/^\d+$/.test(value)) return undefined;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
+}
+
+function parsePages(value: string | undefined, pageCount: number): number[] {
   if (!value) throw new Error("--pages is required for a PDF (for example: 21-24 or 21,23-24)");
   const parts = value.split(",").map((part) => part.trim());
   if (parts.some((part) => !part)) throw new Error("--pages must contain positive one-based page numbers");
 
-  let count = 0;
+  const ranges: Array<[number, number]> = [];
   for (const part of parts) {
     const range = part.match(/^(\d+)-(\d+)$/);
     if (!range) {
-      if (!/^\d+$/.test(part)) throw new Error("--pages must contain positive one-based page numbers");
-      count += 1;
+      const page = pageNumber(part);
+      if (!page) throw new Error("--pages must contain positive one-based page numbers");
+      ranges.push([page, page]);
       continue;
     }
-    const start = Number(range[1]);
-    const end = Number(range[2]);
+    const start = pageNumber(range[1]!);
+    const end = pageNumber(range[2]!);
     if (!start || !end || start > end) throw new Error("--pages must contain positive one-based page numbers");
-    count += end - start + 1;
+    ranges.push([start, end]);
   }
-  if (!count || count > 50) {
-    throw new Error(count > 50 ? "Select at most 50 pages per teaching task" : "--pages must contain positive one-based page numbers");
+  if (ranges.some(([, end]) => end > pageCount)) {
+    throw new Error(`--pages selects beyond the PDF, which has ${pageCount} pages`);
   }
 
-  const pages = parts.flatMap((part) => {
-    const range = part.match(/^(\d+)-(\d+)$/);
-    if (!range) return [Number(part)];
-    const start = Number(range[1]);
-    const end = Number(range[2]);
-    return Array.from({ length: end - start + 1 }, (_, index) => start + index);
-  });
-  if (pages.some((page) => !Number.isInteger(page) || page < 1)) {
-    throw new Error("--pages must contain positive one-based page numbers");
-  }
+  const pages = ranges.flatMap(([start, end]) => Array.from({ length: end - start + 1 }, (_, index) => start + index));
   return [...new Set(pages)].sort((a, b) => a - b);
 }
 
@@ -63,10 +67,89 @@ async function command(command: string, args: string[]) {
   }
 }
 
+async function pdfPageCount(pdf: string) {
+  const info = (await command("pdfinfo", [pdf])).stdout;
+  const pages = Number(info.match(/^Pages:\s+(\d+)$/m)?.[1]);
+  if (!Number.isSafeInteger(pages) || pages < 1) throw new Error("pdfinfo did not report a valid PDF page count");
+  return pages;
+}
+
+async function selectChapter(value: string | undefined, pdf: string, pageCount: number) {
+  if (!value?.trim()) throw new Error("--chapter requires a bookmark title; use --pages for an explicit range");
+  const helper = path.resolve(import.meta.dirname, "../scripts/pdf_chapters.py");
+  const chapters: PdfChapter[] = JSON.parse((await command(process.env.TUTOR_PYTHON ?? "python3", [helper, pdf])).stdout);
+  if (!chapters.length) throw new Error("This PDF has no bookmarks; use --pages instead");
+  if (chapters.some((chapter) => !Number.isSafeInteger(chapter.page) || chapter.page < 1 || chapter.page > pageCount || !Number.isSafeInteger(chapter.level) || chapter.level < 1)) {
+    throw new Error("PDF contains an invalid bookmark; use --pages instead");
+  }
+  const requested = normalizedText(value);
+  const matches = chapters.filter((chapter) => normalizedText(chapter.title) === requested);
+  if (!matches.length) throw new Error(`No PDF bookmark exactly matches ${JSON.stringify(value.trim())}; use --pages or an exact bookmark title`);
+  if (matches.length > 1) {
+    const locations = matches.map((chapter) => `"${chapter.title}" on page ${chapter.page}`).join(", ");
+    throw new Error(`PDF bookmark title is ambiguous: ${locations}; use --pages instead`);
+  }
+  const selected = matches[0]!;
+  const next = chapters.slice(chapters.indexOf(selected) + 1).find((chapter) => chapter.level <= selected.level);
+  const endPage = next?.page ?? pageCount;
+  if (endPage < selected.page) throw new Error("PDF bookmark order is invalid; use --pages instead");
+  const selection: ChapterSelection = {
+    type: "chapter",
+    title: selected.title,
+    startHeading: selected.title,
+    startPage: selected.page,
+    endHeading: next?.title ?? null,
+    endPage,
+  };
+  return { selection, pages: Array.from({ length: endPage - selected.page + 1 }, (_, index) => selected.page + index) };
+}
+
 async function courseDirectory(course: string, dataDir: string) {
   const slug = course.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-|-$/g, "");
   if (!slug) throw new Error("--course must contain a course name");
   return path.resolve(dataDir, slug);
+}
+
+async function claimCourseDirectory(course: string, courseDir: string) {
+  const marker = path.join(courseDir, ".course-name");
+  const rejectCollision = (owner: string) => {
+    throw new Error(`Course directory "${path.basename(courseDir)}" already belongs to ${JSON.stringify(owner)}; use the existing course name or a different --data-dir`);
+  };
+  try {
+    const saved = await readFile(marker, "utf8");
+    if (normalizedText(saved) !== course) rejectCollision(saved.trim());
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  let existed = true;
+  try {
+    await access(courseDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    existed = false;
+  }
+  await mkdir(courseDir, { recursive: true });
+  let owner: string | undefined;
+  try {
+    owner = normalizedText(JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8")).course ?? "");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (owner && owner !== course) rejectCollision(owner);
+  if (!owner && existed) {
+    throw new Error(
+      `Cannot determine the course name for directory "${path.basename(courseDir)}"; move it aside, create .course-name containing the exact original course name, or use a different --data-dir`,
+    );
+  }
+  try {
+    await writeFile(marker, `${course}\n`, { flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const saved = await readFile(marker, "utf8");
+    if (normalizedText(saved) !== course) rejectCollision(saved.trim());
+  }
 }
 
 async function prepareMaterials(pdf: string, pages: number[], screenshots: string[], courseDir: string) {
@@ -117,8 +200,8 @@ async function prepareMaterials(pdf: string, pages: number[], screenshots: strin
   return inputs;
 }
 
-async function buildContext(course: string, inputs: Input[], courseDir: string): Promise<Context> {
-  const context: Context = { course, pages: [], screenshots: [], confirmedAt: null };
+async function buildContext(course: string, inputs: Input[], courseDir: string, selection?: Context["selection"]): Promise<Context> {
+  const context: Context = { course, selection, pages: [], screenshots: [], confirmedAt: null };
   for (const input of inputs) {
     const { markdown, parsedDirectory } = await readOcrResult(input.parsedDirectory!);
     if (input.kind === "pdf-page") {
@@ -191,6 +274,7 @@ async function main() {
       course: { type: "string" },
       pdf: { type: "string" },
       pages: { type: "string" },
+      chapter: { type: "string" },
       screenshots: { type: "string", multiple: true },
       "data-dir": { type: "string", default: ".tutor" },
       "agent-dir": { type: "string" },
@@ -205,38 +289,40 @@ async function main() {
   });
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
   if (!values.course) throw new Error("--course is required");
-  const courseDir = await courseDirectory(values.course, values["data-dir"]!);
+  const course = normalizedText(values.course);
+  const courseDir = await courseDirectory(course, values["data-dir"]!);
   if (values.revise) {
-    if (values.generate || values.memory !== undefined || values.pdf || values.pages || values.screenshots) {
+    if (values.generate || values.memory !== undefined || values.pdf || values.pages || values.chapter || values.screenshots) {
       throw new Error("--revise uses the saved confirmed lecture; omit import, --generate, and --memory options");
     }
+    await claimCourseDirectory(course, courseDir);
     const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
     await deliverRevision(context, courseDir, values["agent-dir"], values.model, values.revise);
     return;
   }
   if (values.memory !== undefined) {
     if (!values.memory.trim()) throw new Error("--memory requires a learner-memory request");
-    await mkdir(courseDir, { recursive: true });
+    await claimCourseDirectory(course, courseDir);
     const session = await createTutorSession(courseDir, values["agent-dir"], values.model, { tools: [] });
     try {
-      console.log(await promptWithMemory(session, `Course: ${values.course}\nLearner memory request: ${values.memory}`));
+      console.log(await promptWithMemory(session, `Course: ${course}\nLearner memory request: ${values.memory}`));
     } finally {
       session.dispose();
     }
     return;
   }
   if (values.generate) {
-    if (values.pdf || values.pages || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
+    if (values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
+    await claimCourseDirectory(course, courseDir);
     const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
     await deliverLecture(context, courseDir, values["agent-dir"], values.model);
     return;
   }
   if (!values.pdf) throw new Error("--pdf is required");
-  if (!values.pages) throw new Error("--pages is required");
-  const pages = parsePages(values.pages);
+  if (values.pages && values.chapter) throw new Error("--pages and --chapter are mutually exclusive");
+  if (!values.pages && !values.chapter) throw new Error("--pages or --chapter is required");
   const provider = values.ocr as OcrProvider;
   if (provider !== "mineru" && provider !== "mistral") throw new Error("--ocr must be mineru or mistral");
-  if (pages.length > 50) throw new Error("Select at most 50 pages per teaching task");
 
   const pdf = path.resolve(values.pdf);
   const screenshots = (values.screenshots ?? []).map((file) => path.resolve(file));
@@ -244,6 +330,10 @@ async function main() {
   for (const screenshot of screenshots) {
     if (!imageExtensions.has(path.extname(screenshot).toLowerCase())) throw new Error(`Unsupported screenshot type: ${path.basename(screenshot)}`);
   }
+  const pageCount = await pdfPageCount(pdf);
+  const chapter = values.chapter ? await selectChapter(values.chapter, pdf, pageCount) : undefined;
+  const pages = chapter ? chapter.pages : parsePages(values.pages, pageCount);
+  await claimCourseDirectory(course, courseDir);
   const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
   const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");
   const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
@@ -265,7 +355,7 @@ async function main() {
       await parseWithMistral(pending, mistralBaseUrl, apiKey);
     }
   }
-  const context = await buildContext(values.course, inputs, courseDir);
+  const context = await buildContext(course, inputs, courseDir, chapter?.selection);
   const input = createTerminalInput();
   try {
     await proposeRoute(context, courseDir, values["agent-dir"], values.model, input);

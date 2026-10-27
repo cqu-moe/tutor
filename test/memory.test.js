@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -116,6 +116,29 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
 
   await route("Digital Design", [say("## Route\nBoolean basics, then gates")]);
   assert.match(await memory("Digital Design", "Show current learner memory"), /empty or does not exist/);
+
+  await rm(path.join(dataDir, "digital-design", ".course-name"));
+  await memory("Digital Design", "Show current learner memory");
+  assert.equal(await readFile(path.join(dataDir, "digital-design", ".course-name"), "utf8"), "Digital Design\n");
+
+  steps = [];
+  requests = [];
+  const collision = await runCli([...args("digital-design"), "--memory", "Show current learner memory"], "", env);
+  assert.equal(collision.code, 1);
+  assert.match(collision.stderr, /Course directory "digital-design" already belongs to "Digital Design"/);
+  assert.match(collision.stderr, /use the existing course name or a different --data-dir/);
+  assert.equal(requests.length, 0, "a course collision must fail before model/memory work");
+  assert.equal(await readFile(path.join(dataDir, "digital-design", ".course-name"), "utf8"), "Digital Design\n");
+
+  const legacyDataDir = path.join(root, "legacy-empty-data");
+  await mkdir(path.join(legacyDataDir, "digital-design"), { recursive: true });
+  const unowned = await runCli([
+    ...args("Digital Design", legacyDataDir), "--memory", "Show current learner memory",
+  ], "", env);
+  assert.equal(unowned.code, 1);
+  assert.match(unowned.stderr, /Cannot determine the course name for directory "digital-design"/);
+  assert.match(unowned.stderr, /move the directory aside|create \.course-name|use a different --data-dir/);
+  assert.equal(requests.length, 0, "an unowned legacy course directory must fail before model/memory work");
 
   await route("Digital Design", [say("## Route\nBoolean basics"), write(preference), write(progress), write(weakness), say("## Revised route\nGates, with De Morgan practice")],
     "Detailed derivations work best across courses. I already learned Boolean basics. In the optional exercise I swapped De Morgan variables twice.\n");

@@ -9,6 +9,24 @@ node --env-file=.env.local bin/tutor.js \
   --screenshots question.png --ocr mistral --data-dir .tutor
 ```
 
+`--pages` accepts positive one-based single pages and closed ranges, and is
+checked against the selected PDF's real `pdfinfo` page count before ranges are
+expanded. Tutor imposes no fixed page-count ceiling; a provider or model may
+still reject an oversized request according to its own limits.
+
+Alternatively, pass `--chapter "Exact bookmark title"` instead of `--pages`.
+Tutor reads the PDF's existing Poppler XML outline—there is no text-heading
+heuristic, OCR index, or chapter framework. The title must match one bookmark
+exactly after trimming and Unicode NFC normalization. A PDF without bookmarks,
+a missing title, or duplicate titles is rejected with an explicit `--pages`
+fallback. The selected span runs from the bookmark through the next sibling
+bookmark's boundary page (or the final PDF page), including every physical page
+in between. Original page numbers remain the provenance, and the start/end
+heading or explicit final-page scope is passed to route proposal and lecture
+generation. A boundary page is included only when the preceding chapter needs
+it; content belonging to the next bookmark is excluded. When there is no next
+sibling, the chapter explicitly runs through the final PDF page.
+
 Use `--ocr mineru` with `MINERU_API_TOKEN` (the precision API's Bearer token), or
 `--ocr mistral` with `MISTRAL_API_KEY`. Only the selected service is called. Model
 selection remains `--model provider/model` as described in [models.md](models.md).

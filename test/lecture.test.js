@@ -62,7 +62,20 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.ok(process.env.TUTOR_RECTO_ROOT, "Set TUTOR_RECTO_ROOT to the installed Recto 0.3.1 skill directory for real export tests");
   const root = await mkdtemp(path.join(tmpdir(), "tutor-lecture-"));
   const pdf = path.join(root, "lecture.pdf");
-  await writeFile(path.join(root, "lecture.typ"), "#set page(width: 5cm, height: 3cm)\nBoolean function\n");
+  await writeFile(
+    path.join(root, "lecture.typ"),
+    [
+      "#set page(width: 5cm, height: 3cm)",
+      "= Front Matter",
+      "Course introduction",
+      "#pagebreak()",
+      "= Chapter One",
+      "Boolean function",
+      "#pagebreak()",
+      "= Chapter Two",
+      "Complement of a function",
+    ].join("\n"),
+  );
   await run("typst", ["compile", path.join(root, "lecture.typ"), pdf]);
   await run("pdftoppm", ["-jpeg", "-singlefile", pdf, path.join(root, "screenshot")]);
   const parsed = path.join(root, "parsed");
@@ -87,6 +100,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   let mode = "success";
   const modelSecret = "lecture-command-key";
   const lectureRequests = [];
+  const routeRequests = [];
   const model = await serve(t, async (request, response) => {
     const payload = await body(request);
     const messages = JSON.stringify(payload.messages);
@@ -109,6 +123,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
       } }] }, "tool_calls");
     }
     if (!messages.includes("Write the complete lecture")) {
+      routeRequests.push(payload);
       return sse(response, { content: messages.includes("Start with gates") ? "## Confirmed order\nGates first; Boolean functions second.\nUser preference: concise Chinese." : "## Route\nBoolean functions first; gates second." });
     }
     lectureRequests.push(payload);
@@ -125,7 +140,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
     const content = mode === "export-error" ? "# Draft retained\n\n<div>Unsupported raw HTML</div>" : [
       "# Gates first", "", "布尔函数（Boolean function）在二值输入上定义输出。原公式见 PDF 第 1 页。", "",
       "\\[F = xy\\]", "", "The inline expression is \\(xy\\).", "", "| x | y | F |", "|---|---|---|", "| 0 | 0 | 0 |", "| 0 | 1 | 0 |", "| 1 | 0 | 0 |", "| 1 | 1 | 1 |", "",
-      "![AND gate，来源 PDF 第 1 页](media/parsed-page-1/images/gate.svg)", "", "新增例题：输入都是 1 时，与运算才输出 1。", "",
+      "![AND gate，来源 PDF 第 2 页](media/parsed-page-2/images/gate.svg)", "", "新增例题：输入都是 1 时，与运算才输出 1。", "",
     ].join("\n");
     return sse(response, { content });
   });
@@ -139,10 +154,23 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const courseDir = path.join(dataDir, "digital-design");
   const env = { ...process.env, MINERU_API_TOKEN: "test-only-token", PI_MEMORY_DIR: path.join(root, "memory"), NO_COLOR: "1" };
   const common = ["--course", "Digital Design", "--data-dir", dataDir, "--agent-dir", agentDir, "--model", "tutorTest/lecture-model"];
-  const args = [...common, "--pdf", pdf, "--pages", "1", "--screenshots", path.join(root, "screenshot.jpg"), "--mineru-base-url", ocr];
+  const args = [...common, "--pdf", pdf, "--chapter", "Chapter One", "--screenshots", path.join(root, "screenshot.jpg"), "--mineru-base-url", ocr];
   const unconfirmed = await runCli(args, "", env);
   assert.equal(unconfirmed.code, 0, unconfirmed.stderr);
   assert.match(unconfirmed.stdout, /Route was not confirmed/);
+  const importContext = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+  assert.equal(importContext.selection.type, "chapter");
+  assert.equal(importContext.selection.title, "Chapter One");
+  assert.equal(importContext.selection.startHeading, "Chapter One");
+  assert.equal(importContext.selection.startPage, 2);
+  assert.equal(importContext.selection.endHeading, "Chapter Two");
+  assert.equal(importContext.selection.endPage, 3);
+  assert.deepEqual(importContext.pages.map((page) => page.sourcePage), [2, 3]);
+  const routePrompt = JSON.stringify(routeRequests[0].messages);
+  assert.match(routePrompt, /Requested chapter: Chapter One/);
+  assert.match(routePrompt, /It ends at heading \\"Chapter Two\\" on PDF page 3/);
+  assert.match(routePrompt, /Boundary page 3 may also contain/);
+  assert.match(routePrompt, /do not cover Chapter Two/);
   await assert.rejects(readFile(path.join(courseDir, "output", "document.pdf")), { code: "ENOENT" });
   const denied = await runCli([...common, "--generate"], "", env);
   assert.equal(denied.code, 1);
@@ -154,6 +182,10 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.match(confirmed.stdout, /Lecture exported/);
   assert.match(confirmed.stdout, /Lecture revised/);
   const prompt = JSON.stringify(lectureRequests[0].messages);
+  assert.match(prompt, /Requested chapter: Chapter One/);
+  assert.match(prompt, /It ends at heading \\"Chapter Two\\" on PDF page 3/);
+  assert.match(prompt, /Boundary page 3 may also contain/);
+  assert.match(prompt, /do not cover Chapter Two/);
   assert.match(prompt, /Gates first; Boolean functions second/);
   assert.match(prompt, /AND truth table/);
   assert.match(prompt, /data:image\/jpeg;base64/);
@@ -199,4 +231,17 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   const resumed = await runCli([...common, "--generate"], "", env);
   assert.equal(resumed.code, 0, resumed.stderr);
   assert.match(resumed.stdout, /Lecture exported/);
+
+  const lastChapterDataDir = path.join(root, "last-chapter-data");
+  const lastChapter = await runCli([
+    "--course", "Digital Design", "--data-dir", lastChapterDataDir, "--agent-dir", agentDir,
+    "--model", "tutorTest/lecture-model", "--pdf", pdf, "--chapter", "Chapter Two",
+    "--screenshots", path.join(root, "screenshot.jpg"), "--mineru-base-url", ocr,
+  ], "", env);
+  assert.equal(lastChapter.code, 0, lastChapter.stderr);
+  const lastPrompt = JSON.stringify(routeRequests.at(-1).messages);
+  assert.match(lastPrompt, /It runs through the final PDF page 3/);
+  assert.doesNotMatch(lastPrompt, /do not cover end of PDF/);
+  const lastContext = JSON.parse(await readFile(path.join(lastChapterDataDir, "digital-design", "context.json"), "utf8"));
+  assert.equal(lastContext.selection.endHeading, null);
 });

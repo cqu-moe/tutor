@@ -33,7 +33,7 @@ Lecture generation uses the same memory-aware prompt helper as route discussion 
 To retry generation from the saved route without re-importing or calling OCR:
 
 ```sh
-node bin/tutor.js --course "Digital Design" --data-dir ./courses --generate
+node bin/tutor.js --course "Digital Design" --data-dir .tutor --generate
 ```
 
 The saved context must already have a confirmed route. `--generate` rejects new PDF/page/screenshot options and checks confirmation again in the new process. Model and agent directory options still apply. It regenerates the lecture; it is not a revision command. The parser/route artifacts and originals are preserved. A new import resets confirmation before generating a new route.

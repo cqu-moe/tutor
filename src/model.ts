@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import path from "node:path";
 import { createTutorSession, imageContent } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
+import { selectionScope } from "./selection.ts";
 import type { Context } from "./types.ts";
 
 export function createTerminalInput() {
@@ -48,7 +49,7 @@ export async function proposeRoute(
     ...context.pages.map((page) => `PDF page ${page.sourcePage}\n${page.markdown}`),
     ...context.screenshots.map((screenshot) => `Screenshot ${screenshot.name}\n${screenshot.markdown}`),
   ].join("\n\n");
-  const ask = `Course: ${context.course}\n\n${sources}\n\nCompare the parsed formulas, tables, and figures with the attached original pages. Propose a teaching route for this exact range. Return only Markdown with: Scope, Prerequisites, Teaching order, and Material doubts. Include page citations.`;
+  const ask = `Course: ${context.course}${selectionScope(context.selection)}\n\n${sources}\n\nCompare the parsed formulas, tables, and figures with the attached original pages. Propose a teaching route for this exact range. Return only Markdown with: Scope, Prerequisites, Teaching order, and Material doubts. Include page citations.`;
   let output = "";
   let confirmed = false;
   try {

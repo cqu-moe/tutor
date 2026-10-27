@@ -6,21 +6,31 @@ CLI 已可从真实课程 PDF 生成可重建的讲解稿。安装依赖后，�
 
 ## 快速开始
 
+首次运行前先完成配置：
+
+1. 按[模型配置](docs/models.md)准备一个支持文字和图片的 Pi 模型；不使用默认模型或默认 Pi 配置时，按文档在首次命令中提供 `--agent-dir` 与/或 `--model`。
+2. 将本次选用的 OCR 凭据放入仓库已忽略的 `.env.local`：Mistral 使用 `MISTRAL_API_KEY`，MinerU 使用 `MINERU_API_TOKEN`。
+3. 按[讲解导出](docs/export.md)设置 `TUTOR_RECTO_ROOT`、`TUTOR_PYTHON`、`TUTOR_DIAGRAM_PYTHON` 与 `TUTOR_TYPST_PACKAGE_CACHE`，并按 [静态图表](docs/diagrams.md) 准备本地图表环境；首次导入前先运行 Recto 的依赖检查。
+
+下列命令把课程资料和学习者记忆保存在仓库已忽略的 `.tutor/` 默认目录：
+
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
 node --env-file=.env.local bin/tutor.js \
   --course "Digital Design" --pdf lecture.pdf --pages 21-24 \
-  --ocr mistral --data-dir ./courses
+  --ocr mistral --data-dir .tutor
 ```
+
+`--pages` 使用 PDF 物理页码；若 PDF 自带书签，也可以用 `--chapter "精确书签标题"` 代替 `--pages`。章节选择会包含下一章标题所在的边界页，并把起止标题传给教学路线和生成阶段，避免漏掉前一页结尾或误讲下一章。
 
 首次导入会解析所选页、保存原页和解析结果，然后显示教学路线。按提示输入调整意见，或输入 `confirm` 确认；未确认前不会生成完整讲解稿。之后可在新进程中重新生成或修订：
 
 ```sh
 node --env-file=.env.local bin/tutor.js \
-  --course "Digital Design" --data-dir ./courses --generate
+  --course "Digital Design" --data-dir .tutor --generate
 
 node --env-file=.env.local bin/tutor.js \
-  --course "Digital Design" --data-dir ./courses \
+  --course "Digital Design" --data-dir .tutor \
   --revise "补充第 23 页 De Morgan 定律的完整推导"
 ```
 

@@ -6,6 +6,16 @@ Tutor uses the local `pi-memory@0.4.2` Pi extension for learner memory. The exte
 
 By default, Tutor stores learner memory in `<data-dir>/.memory`, separate from the user-level Pi memory used by other Pi tools. The hidden directory cannot collide with a normalized course name. Scope is configured before the extension is loaded. Set `PI_MEMORY_DIR` to an absolute path to use another store, as the tests do:
 
+Course directories retain a `.course-name` marker containing the exact trimmed,
+Unicode-NFC course name. Existing courses without that marker are migrated from
+`context.json` on their next resume. A marker-less directory with neither a
+usable `context.json` nor a marker created by the current invocation is treated
+as unowned legacy state and rejected, even when empty; move it aside, manually
+record the exact original course name in `.course-name`, or use another course
+name/data directory. If two names produce the same directory slug—for example,
+`Digital Design` and `digital-design`—Tutor rejects the later name before
+model, memory, OCR, or output work instead of merging their state.
+
 ```sh
 PI_MEMORY_DIR=/path/to/isolated-memory tutor --course "Digital Design" ...
 ```

@@ -2,6 +2,7 @@ import { copyFile, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/
 import path from "node:path";
 import { createTutorSession, imageContent } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
+import { selectionScope } from "./selection.ts";
 import type { Context } from "./types.ts";
 
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".svg"]);
@@ -44,7 +45,7 @@ export async function generateLecture(context: Context, courseDir: string, agent
       ...context.pages.map((page) => imageContent(page.originalPageImage)),
       ...context.screenshots.map((screenshot) => imageContent(screenshot.source)),
     ]);
-    const sources = materials.map((material) => `${material.label}\n${material.markdown}`).join("\n\n");
+    const sources = `${selectionScope(context.selection)}\n\n${materials.map((material) => `${material.label}\n${material.markdown}`).join("\n\n")}`;
     console.log("Generating lecture from the confirmed route...");
     let markdown = "";
     try {
