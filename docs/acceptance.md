@@ -31,6 +31,8 @@ For combined acceptance over the canonical course, run three separate `--revise`
 
 Between revisions, inspect the delivered `content.md`, `typst/document.typ`, `document.pdf`, and `media/`. Unrequested sections and effective figure references must survive; failed generation or export must leave the prior output and all source/OCR artifacts available.
 
+Preserve checks compare image bytes rather than requiring stable media filenames: Recto may add another content-hash prefix when re-exporting unchanged assets.
+
 Exercise memory through separate CLI processes: view the saved facts, correct the progress record, delete a precise course-tagged weakness, and read again. Run one second-course memory request and verify that its facts are not used as Digital Design progress or weakness. Record the deletion Recovery ID, but do not claim that recovery history, backups, or old transcripts were erased.
 
 ## Rebuild and inspect

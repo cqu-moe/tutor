@@ -34,12 +34,19 @@ function occurrences(value: string, pattern: RegExp) {
   return counts;
 }
 
+function headingSequence(value: string) {
+  return [...value.matchAll(/^#{1,6}\s+(.+?)\s*#*$/gm)].map((match) => match[1]);
+}
+
 function preservesOriginal(original: string, revised: string) {
   const checks: Array<[name: string, pattern: RegExp]> = [
     ["section headings", /^#{1,6}\s+(.+?)\s*#*$/gm],
     ["media references", /!\[[^\]]*\]\((media\/[^)\s]+)\)/g],
     ["source citations", /((?:PDF page|Screenshot)[^\n.!;]*)/gi],
   ];
+  if (JSON.stringify(headingSequence(original)) !== JSON.stringify(headingSequence(revised))) {
+    return "revision would change teaching route order; confirm a new teaching route first";
+  }
   for (const [name, pattern] of checks) {
     const expected = occurrences(original, pattern);
     const actual = occurrences(revised, pattern);

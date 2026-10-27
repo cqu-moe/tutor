@@ -163,6 +163,18 @@ test("CLI revises delivered lectures across processes while preserving usable ou
   assert.equal(await readFile(path.join(output, "figures", "gate-source.typ"), "utf8"), figureSource);
   assert.match(JSON.stringify(requests[2].messages), /Rewrite the Boolean functions section/);
   assert.match(JSON.stringify(requests[4].messages), /Add the missing derivation/);
+
+  const ordered = await readFile(path.join(output, "content.md"), "utf8");
+  const examplesStart = ordered.indexOf("## Examples");
+  const functionsStart = ordered.indexOf("## Boolean functions");
+  const reordered = ordered.slice(0, functionsStart) + ordered.slice(examplesStart) + "\n" + ordered.slice(functionsStart, examplesStart);
+  const orderFeedback = "Move the examples before the Boolean functions";
+  replacements.set(orderFeedback, { oldText: ordered, newText: reordered });
+  const orderChange = await runCli([...common, "--revise", orderFeedback], env);
+  assert.equal(orderChange.code, 1, "changing teaching order without route confirmation must fail");
+  assert.match(orderChange.stderr, /teaching route.*confirm/i);
+  assert.equal(await readFile(path.join(output, "content.md"), "utf8"), ordered);
+
   const { stdout: pdfText } = await run("pdftotext", [path.join(output, "document.pdf"), "-"]);
   assert.match(pdfText, /Rewritten explanation/);
   await run("typst", ["compile", "--root", ".", "--font-path", "typst/fonts", "typst/document.typ", path.join(root, "rebuilt.pdf")], { cwd: output });
