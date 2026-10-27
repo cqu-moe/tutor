@@ -1,51 +1,20 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import path from "node:path";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  getAgentDir,
-  ModelRuntime,
-  resolveCliModel,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { createTutorSession, imageContent } from "./runtime.ts";
 import type { Context } from "./types.ts";
 
-async function imageContent(file: string) {
-  const bytes = await readFile(file);
-  return { type: "image" as const, data: bytes.toString("base64"), mimeType: `image/${path.extname(file).slice(1)}` };
-}
-
 export async function proposeRoute(context: Context, courseDir: string, agentDir: string | undefined, model: string | undefined) {
-  const effectiveAgentDir = agentDir ?? getAgentDir();
-  const modelRuntime = await ModelRuntime.create({
-    authPath: path.join(effectiveAgentDir, "auth.json"),
-    modelsPath: path.join(effectiveAgentDir, "models.json"),
-  });
-  const requested = model ? resolveCliModel({ cliModel: model, modelRuntime }) : undefined;
-  if (requested?.error) throw new Error(`Pi model is unavailable: ${requested.error}`);
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: courseDir,
-    agentDir: effectiveAgentDir,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
+  const session = await createTutorSession(courseDir, agentDir, model, {
     systemPrompt: "You are a careful course tutor. Ground claims in supplied course material and cite original pages.",
-  });
-  await resourceLoader.reload();
-  const { session } = await createAgentSession({
-    cwd: courseDir,
-    agentDir: effectiveAgentDir,
-    modelRuntime,
-    model: requested?.model,
     tools: ["read"],
-    resourceLoader,
-    sessionManager: SessionManager.inMemory(),
   });
 
-  const images = await Promise.all(context.pages.map((page) => imageContent(page.originalPageImage)));
+  const originalImages = [
+    ...context.pages.map((page) => page.originalPageImage),
+    ...context.screenshots.map((screenshot) => screenshot.source),
+  ];
+  const images = await Promise.all(originalImages.map(imageContent));
   const sources = [
     ...context.pages.map((page) => `PDF page ${page.sourcePage}\n${page.markdown}`),
     ...context.screenshots.map((screenshot) => `Screenshot ${screenshot.name}\n${screenshot.markdown}`),
