@@ -11,6 +11,7 @@ import { generateLecture } from "./lecture.ts";
 import { parseWithMinerU } from "./mineru.ts";
 import { parseWithMistral } from "./mistral.ts";
 import { proposeRoute } from "./model.ts";
+import { reviseLecture } from "./revision.ts";
 import type { Context, Input } from "./types.ts";
 
 const execute = promisify(execFile);
@@ -193,6 +194,7 @@ async function main() {
       "agent-dir": { type: "string" },
       model: { type: "string" },
       generate: { type: "boolean" },
+      revise: { type: "string" },
       ocr: { type: "string", default: "mineru" },
       "mineru-base-url": { type: "string", default: "https://mineru.net" },
       "mistral-base-url": { type: "string", default: "https://api.mistral.ai" },
@@ -201,6 +203,19 @@ async function main() {
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
   if (!values.course) throw new Error("--course is required");
   const courseDir = await courseDirectory(values.course, values["data-dir"]!);
+  if (values.revise) {
+    if (values.generate || values.pdf || values.pages || values.screenshots) {
+      throw new Error("--revise uses the saved confirmed lecture; omit import and --generate options");
+    }
+    const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
+    const source = await reviseLecture(context, courseDir, values["agent-dir"], values.model, values.revise);
+    const output = await exportLecture(courseDir, source);
+    await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
+      console.warn(`Revision exported; draft remains at ${source}`);
+    });
+    console.log(`Lecture revised: ${output} (content.md, typst/document.typ, document.pdf, media/)`);
+    return;
+  }
   if (values.generate) {
     if (values.pdf || values.pages || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
     const context: Context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
