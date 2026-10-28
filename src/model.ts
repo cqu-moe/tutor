@@ -32,6 +32,7 @@ export async function proposeRoute(
   agentDir: string | undefined,
   model: string | undefined,
   input = createTerminalInput(),
+  resume = false,
 ) {
   const { context } = lecture;
   const session = await createTutorSession(courseDir, agentDir, model, {
@@ -52,7 +53,7 @@ export async function proposeRoute(
   let output = "";
   let confirmed = false;
   try {
-    output = await promptWithMemory(session, ask, { images });
+    output = resume ? lecture.route : await promptWithMemory(session, ask, { images });
     process.stdout.write(output);
     if (!output.trim()) {
       throw new Error("Pi route generation failed: the model returned no route");
@@ -61,6 +62,7 @@ export async function proposeRoute(
     await saveDraft(courseDir, lecture);
 
     process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
+    process.send?.({ type: "route", route: lecture.route });
     for (;;) {
       const line = await input.nextLine();
       if (line === undefined) {
@@ -86,6 +88,7 @@ export async function proposeRoute(
       lecture.route = output.trim();
       await saveDraft(courseDir, lecture);
       process.stdout.write("\n\nType an adjustment, or type 'confirm' to confirm the route.\n> ");
+      process.send?.({ type: "route", route: lecture.route });
     }
   } finally {
     if (!confirmed) input.close();

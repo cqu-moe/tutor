@@ -30,6 +30,15 @@ jobs:
           test "$(uname -m)" = x86_64
           test "$(id -u)" -ne 0
           bun install --frozen-lockfile --ignore-scripts
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.22.0
+      - name: Install and check GUI packages
+        run: |
+          npm install --global pnpm@11.19.0
+          cd gui
+          pnpm install --frozen-lockfile
+          pnpm check:design
       - name: Build four executables
         run: bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
       - name: Install Linux document dependencies
@@ -66,7 +75,7 @@ jobs:
       - name: Relocate binary and remove build dependencies
         run: |
           install -m 755 dist/tutor-linux-x64 "$RUNNER_TEMP/tutor"
-          rm -rf node_modules .build/resources
+          rm -rf node_modules gui/node_modules gui/dist .build/resources
           echo "TUTOR_TEST_BINARY=$RUNNER_TEMP/tutor" >> "$GITHUB_ENV"
       - name: Check standalone startup and doctor
         env:

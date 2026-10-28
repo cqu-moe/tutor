@@ -1,0 +1,29 @@
+{
+  "name": "@cqu-moe/tutor-gui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "check:design": "node node_modules/@cqu-moe/ui/dist/check-design.mjs src"
+  },
+  "dependencies": {
+    "@cqu-moe/theme": "file:./.design/cqu-moe-theme-1.1.0.tgz",
+    "@cqu-moe/ui": "file:./.design/cqu-moe-ui-1.1.0.tgz",
+    "lucide-react": "1.48.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "react-router": "7.18.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.1"
+  },
+  "packageManager": "pnpm@11.19.0"
+}
