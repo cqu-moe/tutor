@@ -10,10 +10,13 @@ if (selected.some((target) => !targets.includes(target))) {
 }
 const root = path.resolve(import.meta.dirname, "..");
 process.chdir(root);
+const guiBuild = Bun.spawn(["pnpm", "run", "build"], { cwd: path.join(root, "gui"), stdout: "inherit", stderr: "inherit" });
+if (await guiBuild.exited !== 0) throw new Error("GUI build failed; install its dependencies with pnpm in gui/");
 const pi = path.dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const resources = ".build/resources";
 await rm(resources, { recursive: true, force: true });
 await mkdir(`${resources}/pi`, { recursive: true });
+await cp("gui/dist", `${resources}/gui`, { recursive: true });
 await cp(path.join(pi, "../package.json"), `${resources}/pi/package.json`);
 await cp(path.join(pi, "modes/interactive/theme"), `${resources}/pi/theme`, { recursive: true, filter: (file) => !path.extname(file) || file.endsWith(".json") });
 for (const arch of ["arm64", "x64"]) {

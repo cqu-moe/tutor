@@ -2,7 +2,9 @@
 
 组合现成工具的个人课程讲解 Agent：读取课程资料和学习者记忆，先对齐教学路线，再生成能够独立阅读、替代指定范围课件的讲解稿。
 
-CLI 已可从真实课程 PDF 生成可重建的讲解稿。安装依赖后，先用一条导入命令确认教学路线；确认时生成 Markdown、Typst、PDF 和图片，之后可用局部反馈继续修订。
+CLI 与本地浏览器工作台可从课程 PDF 生成可重建的讲解稿。安装依赖后，先导入资料并确认教学路线；确认时生成 Markdown、Typst、PDF 和图片，之后可用局部反馈继续修订。
+
+浏览器入口：`tutor gui`。支持上传资料、调整与确认路线、阅读和下载讲解稿、局部修订及学习反馈，详见 [GUI 使用说明](docs/gui.md)。
 
 ## 快速开始
 
@@ -42,11 +44,16 @@ tutor --env-file "$HOME/.config/tutor/env" \
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
+cd gui
+pnpm install --frozen-lockfile
+cd ..
 bun run tutor --help
 bun run build
 # 可选：构建所有支持的平台
 bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
 ```
+
+前端开发构建需 Node.js 22.12+ 与 pnpm 11.19.0。`bun run build` 自动构建并内嵌 GUI 静态资源。
 
 产物为 `dist/tutor-<平台>-<架构>`，可以移动、重命名为 `tutor` 后直接执行。主程序、记忆扩展、书签脚本和运行资源随可执行文件提供；文档排版及绘图工具按安装说明准备。Linux 目标使用 glibc，x64 使用 baseline 指令集；不包含 Windows 或 musl 构建。
 
@@ -56,7 +63,7 @@ bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
 
 ## 第一版范围
 
-- 本地 CLI，输入课程 PDF 和补充截图。
+- 本地 CLI 与浏览器工作台，输入课程 PDF 和补充截图。
 - Pi SDK；支持 Magpie、BYOK API 和自定义兼容接口。
 - 本地学习者记忆；按课程保留进度和薄弱点。
 - 用户可配置 MinerU VLM 或 Mistral OCR。
@@ -67,6 +74,7 @@ bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
 
 ## 项目文档
 
+- [GUI 使用说明](docs/gui.md)
 - [第一版规格](docs/spec.md)
 - [安装与依赖检查](docs/install.md)
 - [工具组合与流程](docs/plan.md)

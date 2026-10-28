@@ -4,11 +4,14 @@
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.4",
-  "engines": { "bun": ">=1.4.4" },
+  "engines": {
+    "bun": ">=1.4.4"
+  },
   "scripts": {
     "tutor": "bun --no-env-file src/cli.ts",
     "build": "bun --no-env-file scripts/build.ts",
-    "test": "bun --no-env-file test --timeout 180000"
+    "test": "bun --no-env-file test --timeout 180000",
+    "gui": "bun --no-env-file src/cli.ts gui"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",

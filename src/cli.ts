@@ -295,6 +295,9 @@ async function main() {
       model: { type: "string" },
       memory: { type: "string" },
       generate: { type: "boolean" },
+      resume: { type: "boolean" },
+      port: { type: "string", default: "4318" },
+      "no-open": { type: "boolean" },
       revise: { type: "string" },
       ocr: { type: "string", default: "mineru" },
       "mineru-base-url": { type: "string", default: "https://mineru.net" },
@@ -308,10 +311,19 @@ async function main() {
   agentDirForDiagnostics = values["agent-dir"] ?? getAgentDir();
   if (values.version) { console.log(`tutor ${pkg.version}`); return; }
   if (values.help) {
-    console.log(`Tutor — generate and revise course lectures\n\nUsage:\n  tutor [--env-file FILE] doctor [--ocr mineru|mistral] [--agent-dir DIR] [--model PROVIDER/MODEL]\n  tutor [--env-file FILE] --course NAME --pdf FILE (--pages RANGE | --chapter TITLE)\n  tutor [--env-file FILE] --course NAME --generate\n  tutor [--env-file FILE] --course NAME --revise FEEDBACK\n  tutor [--env-file FILE] --course NAME --memory REQUEST\n\nOptions:\n  --data-dir DIR       Course storage (default: .tutor)\n  --agent-dir DIR      Pi models.json and auth.json directory\n  --model ID           Vision-capable provider/model\n  --ocr PROVIDER       mineru (default) or mistral\n  --screenshots FILE   Additional image; repeat for multiple images\n  --env-file FILE      Explicit environment file; existing environment wins\n  --help, --version\n\nInstall external dependencies: docs/install.md\nNo .env file is loaded automatically. Doctor makes no model/OCR requests.`);
+    console.log(`Tutor — generate and revise course lectures\n\nUsage:\n  tutor [--env-file FILE] gui [--port 4318] [--no-open]\n  tutor [--env-file FILE] doctor [--ocr mineru|mistral] [--agent-dir DIR] [--model PROVIDER/MODEL]\n  tutor [--env-file FILE] --course NAME --pdf FILE (--pages RANGE | --chapter TITLE)\n  tutor [--env-file FILE] --course NAME --generate\n  tutor [--env-file FILE] --course NAME --revise FEEDBACK\n  tutor [--env-file FILE] --course NAME --memory REQUEST\n\nOptions:\n  --resume             Resume a saved, unconfirmed teaching route\n  --data-dir DIR       Course storage (default: .tutor)\n  --agent-dir DIR      Pi models.json and auth.json directory\n  --model ID           Vision-capable provider/model\n  --ocr PROVIDER       mineru (default) or mistral\n  --screenshots FILE   Additional image; repeat for multiple images\n  --env-file FILE      Explicit environment file; existing environment wins\n  --help, --version\n\nInstall external dependencies: docs/install.md\nNo .env file is loaded automatically. Doctor makes no model/OCR requests.`);
     return;
   }
   if (positionals.length) {
+    if (positionals.length === 1 && positionals[0] === "gui") {
+      const { startGui } = await import("./gui.ts");
+      await startGui({
+        dataDir: values["data-dir"]!, agentDir: values["agent-dir"], model: values.model,
+        ocr: values.ocr!, port: Number(values.port), open: !values["no-open"],
+        mineruBaseUrl: values["mineru-base-url"]!, mistralBaseUrl: values["mistral-base-url"]!,
+      });
+      return;
+    }
     if (positionals.length !== 1 || positionals[0] !== "doctor") throw new Error("Unknown command; run tutor --help");
     const { doctor } = await import("./doctor.ts");
     process.exitCode = await doctor({ ocr: values.ocr, agentDir: values["agent-dir"], model: values.model });
@@ -321,7 +333,7 @@ async function main() {
   const course = normalizedText(values.course);
   const courseDir = await courseDirectory(course, values["data-dir"]!);
   if (values.revise) {
-    if (values.generate || values.memory !== undefined || values.pdf || values.pages || values.chapter || values.screenshots) {
+    if (values.generate || values.resume || values.memory !== undefined || values.pdf || values.pages || values.chapter || values.screenshots) {
       throw new Error("--revise uses the saved confirmed lecture; omit import, --generate, and --memory options");
     }
     await claimCourseDirectory(course, courseDir);
@@ -340,57 +352,69 @@ async function main() {
     return;
   }
   if (values.generate) {
-    if (values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
+    if (values.resume || values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
     await claimCourseDirectory(course, courseDir);
     await deliverLecture(await readDraft(courseDir), courseDir, values["agent-dir"], values.model);
     return;
   }
-  if (!values.pdf) throw new Error("--pdf is required");
-  if (values.pages && values.chapter) throw new Error("--pages and --chapter are mutually exclusive");
-  if (!values.pages && !values.chapter) throw new Error("--pages or --chapter is required");
-  const provider = values.ocr as OcrProvider;
-  if (provider !== "mineru" && provider !== "mistral") throw new Error("--ocr must be mineru or mistral");
+  let lecture: Lecture;
+  if (values.resume) {
+    if (values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--resume uses the saved teaching route; omit new input options");
+    await claimCourseDirectory(course, courseDir);
+    lecture = await readDraft(courseDir);
+    if (lecture.context.confirmedAt) throw new Error("Route is already confirmed; use --generate");
+  } else {
+    if (!values.pdf) throw new Error("--pdf is required");
+    if (values.pages && values.chapter) throw new Error("--pages and --chapter are mutually exclusive");
+    if (!values.pages && !values.chapter) throw new Error("--pages or --chapter is required");
+    const provider = values.ocr as OcrProvider;
+    if (provider !== "mineru" && provider !== "mistral") throw new Error("--ocr must be mineru or mistral");
 
-  const pdf = path.resolve(values.pdf);
-  const screenshots = (values.screenshots ?? []).map((file) => path.resolve(file));
-  if (!pdf.toLowerCase().endsWith(".pdf")) throw new Error("--pdf must point to a PDF file");
-  for (const screenshot of screenshots) {
-    if (!imageExtensions.has(path.extname(screenshot).toLowerCase())) throw new Error(`Unsupported screenshot type: ${path.basename(screenshot)}`);
-  }
-  const pageCount = await pdfPageCount(pdf);
-  const chapter = values.chapter ? await selectChapter(values.chapter, pdf, pageCount) : undefined;
-  const pages = chapter ? chapter.pages : parsePages(values.pages, pageCount);
-  await claimCourseDirectory(course, courseDir);
-  await readPublishedLecture(courseDir);
-  const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
-  const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");
-  const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
-  const pending = await uncachedInputs(
-    inputs,
-    courseDir,
-    provider,
-    provider === "mineru" ? "vlm" : "mistral-ocr-latest",
-    provider === "mineru" ? mineruBaseUrl : mistralBaseUrl,
-  );
-  if (pending.length) {
-    if (provider === "mineru") {
-      const token = process.env.MINERU_API_TOKEN;
-      if (!token) throw new Error("MINERU_API_TOKEN is required. MinerU's precision API uses a Bearer token.");
-      await parseWithMinerU(pending, mineruBaseUrl, token);
-    } else {
-      const apiKey = process.env.MISTRAL_API_KEY;
-      if (!apiKey) throw new Error("MISTRAL_API_KEY is required for Mistral OCR.");
-      await parseWithMistral(pending, mistralBaseUrl, apiKey);
+    const pdf = path.resolve(values.pdf);
+    process.send?.({ type: "stage", stage: "preparing" });
+    const screenshots = (values.screenshots ?? []).map((file) => path.resolve(file));
+    if (!pdf.toLowerCase().endsWith(".pdf")) throw new Error("--pdf must point to a PDF file");
+    for (const screenshot of screenshots) {
+      if (!imageExtensions.has(path.extname(screenshot).toLowerCase())) throw new Error(`Unsupported screenshot type: ${path.basename(screenshot)}`);
     }
+    const pageCount = await pdfPageCount(pdf);
+    const chapter = values.chapter ? await selectChapter(values.chapter, pdf, pageCount) : undefined;
+    const pages = chapter ? chapter.pages : parsePages(values.pages, pageCount);
+    await claimCourseDirectory(course, courseDir);
+    await readPublishedLecture(courseDir);
+    const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
+    const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");
+    const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
+    const pending = await uncachedInputs(
+      inputs,
+      courseDir,
+      provider,
+      provider === "mineru" ? "vlm" : "mistral-ocr-latest",
+      provider === "mineru" ? mineruBaseUrl : mistralBaseUrl,
+    );
+    if (pending.length) {
+      process.send?.({ type: "stage", stage: "ocr" });
+      if (provider === "mineru") {
+        const token = process.env.MINERU_API_TOKEN;
+        if (!token) throw new Error("MINERU_API_TOKEN is required. MinerU's precision API uses a Bearer token.");
+        await parseWithMinerU(pending, mineruBaseUrl, token);
+      } else {
+        const apiKey = process.env.MISTRAL_API_KEY;
+        if (!apiKey) throw new Error("MISTRAL_API_KEY is required for Mistral OCR.");
+        await parseWithMistral(pending, mistralBaseUrl, apiKey);
+      }
+    }
+    const context = await buildContext(course, inputs, courseDir, chapter?.selection);
+    lecture = { context, route: "" };
+    await saveDraft(courseDir, lecture);
   }
-  const context = await buildContext(course, inputs, courseDir, chapter?.selection);
-  const lecture: Lecture = { context, route: "" };
-  await saveDraft(courseDir, lecture);
   const input = createTerminalInput();
   try {
-    await proposeRoute(lecture, courseDir, values["agent-dir"], values.model, input);
-    if (!context.confirmedAt) return;
+    process.send?.({ type: "stage", stage: "route" });
+    await proposeRoute(lecture, courseDir, values["agent-dir"], values.model, input, values.resume);
+    if (!lecture.context.confirmedAt) return;
     await deliverLecture(lecture, courseDir, values["agent-dir"], values.model);
+    if (process.send) return;
     process.stdout.write("\nType revision feedback, or type 'done' to finish.\n> ");
     for (;;) {
       const line = await input.nextLine();
@@ -405,7 +429,9 @@ async function main() {
 }
 
 async function deliverLecture(lecture: Lecture, courseDir: string, agentDir: string | undefined, model: string | undefined) {
+  process.send?.({ type: "stage", stage: "generating" });
   const source = await generateLecture(lecture, courseDir, agentDir, model);
+  process.send?.({ type: "stage", stage: "exporting" });
   const output = await exportLecture(courseDir, source, lecture);
   await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
     console.warn(`Export succeeded; generation draft remains at ${source}`);
@@ -414,9 +440,11 @@ async function deliverLecture(lecture: Lecture, courseDir: string, agentDir: str
 }
 
 async function deliverRevision(courseDir: string, agentDir: string | undefined, model: string | undefined, feedback: string) {
+  process.send?.({ type: "stage", stage: "revising" });
   const lecture = await readPublishedLecture(courseDir);
   if (!lecture) throw new Error("Generate and export a lecture before revising it");
   const source = await reviseLecture(lecture, courseDir, agentDir, model, feedback);
+  process.send?.({ type: "stage", stage: "exporting" });
   const output = await exportLecture(courseDir, source, lecture);
   await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
     console.warn(`Revision exported; draft remains at ${source}`);
@@ -431,4 +459,6 @@ try {
   const message = await redactedMessage(raw, agentDirForDiagnostics);
   console.error(`tutor: ${message}`);
   process.exitCode = 1;
+} finally {
+  process.disconnect?.();
 }
