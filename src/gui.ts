@@ -193,13 +193,16 @@ export async function startGui(options: Options) {
         if (!(pdf instanceof File) || !pdf.size || !pdf.name.toLowerCase().endsWith(".pdf") || !(await pdf.slice(0, 1024).text()).includes("%PDF-")) throw new RequestError("请选择有效的 PDF 文件。");
         if (pdf.size + screenshots.reduce((total, file) => total + file.size, 0) > 120 * 1024 * 1024) throw new RequestError("本次文件合计不能超过 120 MB。", 413);
         if (screenshots.length > 12 || screenshots.some((file) => !/\.(png|jpe?g|webp)$/i.test(file.name))) throw new RequestError("补充截图仅支持 PNG、JPEG、WebP，最多 12 张。");
+        if (screenshots.some((file) => /[/\\\0]/.test(file.name))) throw new RequestError("截图文件名不能包含路径或空字符。");
         await mkdir(dataDir, { recursive: true });
         upload = await mkdtemp(path.join(dataDir, ".upload-"));
         const pdfPath = path.join(upload, "material.pdf");
         await Bun.write(pdfPath, pdf);
         const args = ["--course", course, "--pdf", pdfPath, mode === "pages" ? "--pages" : "--chapter", selection];
         for (const [index, file] of screenshots.entries()) {
-          const target = path.join(upload, `screenshot-${index + 1}${path.extname(file.name).toLowerCase()}`);
+          const directory = path.join(upload, `screenshot-${index + 1}`);
+          await mkdir(directory);
+          const target = path.join(directory, file.name);
           await Bun.write(target, file);
           args.push("--screenshots", target);
         }

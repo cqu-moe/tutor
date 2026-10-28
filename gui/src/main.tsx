@@ -281,7 +281,7 @@ function Courses({ state, refresh }: { state: GuiState; refresh: () => void }) {
             <div className="panel course-list">
               {courses.map((course) => (
                 <article className="course-row" key={course.id}>
-                  <FileText size={20} aria-hidden="true" />
+                  <FileText size={16} aria-hidden="true" />
                   <div className="course-info">
                     <Link to={`/courses/${encodeURIComponent(course.id)}`}>
                       {course.name}

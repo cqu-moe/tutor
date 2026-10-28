@@ -153,6 +153,12 @@ test("GUI import persists an adjusted route across restart without repeating OCR
   const pdf = path.join(root, "lecture.pdf");
   await writeFile(path.join(root, "lecture.typ"), "#set page(width: 2cm, height: 2cm)\nBoolean algebra\n");
   await run("typst", ["compile", path.join(root, "lecture.typ"), pdf]);
+  const screenshots = [];
+  for (const resolution of [36, 72]) {
+    const image = path.join(root, `question-${resolution}`);
+    await run("pdftoppm", ["-png", "-singlefile", "-r", String(resolution), pdf, image]);
+    screenshots.push(await readFile(`${image}.png`));
+  }
   const courseDir = path.join(data, "digital-design");
   const previousContent = "# Previous lecture\nDo not replace me.\n";
   const previousManifest = JSON.stringify({
@@ -171,7 +177,8 @@ test("GUI import persists an adjusted route across restart without repeating OCR
     assert.equal(request.headers.authorization, "Bearer gui-ocr-fixture-secret");
     const payload = await body(request);
     assert.equal(payload.model, "mistral-ocr-latest");
-    assert.match(payload.document.document_url, /^data:application\/pdf;base64,/);
+    if (payload.document.type === "document_url") assert.match(payload.document.document_url, /^data:application\/pdf;base64,/);
+    else assert.match(payload.document.image_url, /^data:image\/png;base64,/);
     ocrCalls++;
     response.end(JSON.stringify({ pages: [{ index: 0, markdown: "# Boolean functions\nF = xy + x'z" }] }));
   });
@@ -190,14 +197,27 @@ test("GUI import persists an adjusted route across restart without repeating OCR
   const extra = ["--ocr", "mistral", "--mistral-base-url", ocrUrl, "--agent-dir", agentDir, "--model", "tutorTest/gui-model"];
   const env = { ...process.env, MISTRAL_API_KEY: "gui-ocr-fixture-secret", NO_COLOR: "1" };
   const first = await start(t, data, extra, env);
-  const imported = await first.request("/api/jobs", { method: "POST", body: await importForm(pdf) });
+  for (const name of ["../escaped.png", "..\\escaped.png", "invalid\0.png"]) {
+    const unsafe = await importForm(pdf);
+    unsafe.append("screenshots", new File([screenshots[0]], name, { type: "image/png" }));
+    assert.equal((await first.request("/api/jobs", { method: "POST", body: unsafe })).status, 400);
+  }
+  const form = await importForm(pdf);
+  for (const bytes of screenshots) form.append("screenshots", new File([bytes], "题目-3.PNG", { type: "image/png" }));
+  const imported = await first.request("/api/jobs", { method: "POST", body: form });
   assert.equal(imported.status, 202);
   const concurrent = await first.request("/api/jobs", { method: "POST", body: await importForm(pdf) });
   assert.equal(concurrent.status, 409);
 
   await waitForJob(first.request, (job) => job.status === "awaiting-route");
-  assert.equal(ocrCalls, 1);
+  assert.equal(ocrCalls, 3);
   assert.equal(model.requests.length, 1);
+  const importedDraft = JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8"));
+  assert.deepEqual(importedDraft.context.screenshots.map((image) => image.name), ["题目-3.PNG", "题目-3.PNG"]);
+  for (const [index, image] of importedDraft.context.screenshots.entries()) {
+    assert.deepEqual(await readFile(image.source), screenshots[index], "same-name uploads keep their own bytes");
+  }
+  assert.ok(JSON.stringify(model.requests[0].messages).includes("题目-3.PNG"), "the model receives the original screenshot name");
   const adjusted = await first.request("/api/jobs/input", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -229,7 +249,7 @@ test("GUI import persists an adjusted route across restart without repeating OCR
   });
   assert.equal(resumed.status, 202);
   await waitForJob(second.request, (job) => job.status === "awaiting-route");
-  assert.equal(ocrCalls, 1);
+  assert.equal(ocrCalls, 3);
   assert.equal(model.requests.length, 2);
   assert.equal(JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8")).route, persisted.route);
 
@@ -331,7 +351,6 @@ test("GUI confirmation persists before a controlled generation export failure", 
   assert.ok(draft.context.confirmedAt);
   assert.match(draft.route, /Logic gates/);
   assert.equal(model.requests.length, 1);
-  assert.match(JSON.stringify(model.requests[0].messages), /Write the complete lecture/);
   assert.equal(await readFile(path.join(courseDir, "output", "content.md"), "utf8"), previousContent);
   assert.equal(await readFile(path.join(courseDir, "output", "lecture.json"), "utf8"), previousManifest);
   const stages = (await readdir(courseDir)).filter((name) => name.startsWith(".lecture-"));

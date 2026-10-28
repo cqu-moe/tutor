@@ -302,6 +302,7 @@ details > .field {
   margin-top: var(--space-3);
 }
 .job-status {
+  overflow-wrap: anywhere;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
