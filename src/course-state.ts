@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readDraft, saveDraft } from "./lecture-state.ts";
 import type { Context } from "./types.ts";
@@ -216,7 +216,29 @@ export async function saveCourse(courseDir: string, course: CourseRecord) {
 }
 
 async function migrateLegacyCourse(courseDir: string): Promise<CourseRecord> {
-  const lecture = await readDraft(courseDir);
+  const draft = await readDraft(courseDir);
+  let lecture = draft;
+  const legacyOutput = path.join(courseDir, "output");
+  let published = await access(path.join(legacyOutput, "content.md")).then(() => true, (error) => {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  });
+  let hasManifest = false;
+  if (published) {
+    try {
+      lecture = JSON.parse(await readFile(path.join(legacyOutput, "lecture.json"), "utf8"));
+      hasManifest = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (!lecture.context.confirmedAt || !lecture.route.trim()) {
+      if (hasManifest) {
+        throw new CourseStateError("Existing lecture has no confirmed source metadata; restore its context and route before retrying migration");
+      }
+      // A saved Markdown beside an unconfirmed draft is not a published lecture.
+      published = false;
+    }
+  }
   const now = new Date().toISOString();
   const materialId = randomUUID();
   const chapterId = randomUUID();
@@ -231,7 +253,7 @@ async function migrateLegacyCourse(courseDir: string): Promise<CourseRecord> {
     screenshots: lecture.context.screenshots.map((screenshot) => screenshot.source),
     sourceHash,
   })).digest("hex");
-  const routeTitle = routeChapterTitles(lecture.route)[0];
+  const routeTitle = routeChapterTitles(lecture.route)[0] ?? routeChapterTitles(draft.route)[0];
   const title = lecture.context.selection?.title ?? routeTitle ?? "未命名资料";
   const course: CourseRecord = {
     schemaVersion: 1,
@@ -277,6 +299,24 @@ async function migrateLegacyCourse(courseDir: string): Promise<CourseRecord> {
       chapterIds: [chapterId],
     },
   };
+  if (published) {
+    const stage = await mkdtemp(path.join(courseDir, ".legacy-lecture-"));
+    try {
+      const output = path.join(courseDir, "chapters", chapterId, "output");
+      await cp(legacyOutput, path.join(stage, "output"), { recursive: true });
+      if (!hasManifest) {
+        await writeFile(path.join(stage, "output", "lecture.json"), `${JSON.stringify(lecture, null, 2)}\n`);
+      }
+      await mkdir(path.dirname(output), { recursive: true });
+      await rename(path.join(stage, "output"), output);
+      course.chapters[0].lecture = { status: "published", output, courseVersion: 1 };
+    } catch (error) {
+      // Do not let a missing export file look like an absent legacy course to callers.
+      throw new CourseStateError(`Legacy lecture migration failed; original files retained, correct the error and retry: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+  }
   return course;
 }
 
