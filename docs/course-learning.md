@@ -40,3 +40,9 @@ tutor --course "Digital Design" --data-dir .tutor \
 ```
 
 The output is published under `chapters/<chapter-id>/output/` with the same Markdown, Typst, PDF, media, and figure layout as a whole-course lecture. Its source selection is bound to the chapter's material version. The GUI exposes the same action from the course route page and serves chapter files through its local session-protected API.
+
+## Upgrade and legacy courses
+
+Opening a legacy course binds its saved draft/context and route to stable course/material/chapter IDs without inferring learning progress. A previously published lecture is copied into its chapter output before later whole-course publication can replace `output/`; original source/OCR/export inputs remain present. The published manifest is preferred over a newer unconfirmed draft. A failed migration does not commit the course record: correct the reported filesystem problem and re-enter to retry.
+
+Legacy learner facts, recovery records and ambiguous inputs follow the separate [memory migration](memory.md#storage-and-migration) rules. Unadmitted old work remains pending until explicitly continued; see [task resumption](task-resumption.md). Process continuation does not restore deleted files or a lost disk.

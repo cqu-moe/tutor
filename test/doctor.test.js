@@ -59,7 +59,7 @@ test("doctor is local, preserves configuration, checks only selected OCR and loa
     assert.match(missing.output, /Cannot read --env-file/);
     const version = await run(["--version"]);
     assert.equal(version.code, 0);
-    assert.match(version.output, /^tutor \d+\.\d+\.\d+/);
+    assert.equal(version.output.trim(), "tutor 0.2.0");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await rm(root, { recursive: true, force: true });

@@ -43,4 +43,4 @@ Memory effects and their domain receipts commit together in one official Pi docu
 
 Progress uses the same receipt to commit an intent before the course-file setter. Recovery compares chapter authority before applying the setter again, then completes the receipt. This avoids duplicate facts, deletions or chapter-version increments after process interruption. It does not promise exactly-once model requests or provider billing.
 
-Use one writer for a data directory. The full teaching-task lifecycle and cross-process data-directory lock belong to the task-runtime follow-up. This contract covers process interruption, not lost disks, deleted data directories or multi-device synchronization.
+CLI and GUI enforce one writer for the entire data directory with an OS lock. Close the GUI executor before using a direct CLI writer. The shared task list, original task continuation and cancellation are described in [task resumption](task-resumption.md). This contract covers process interruption, not lost disks, deleted data directories or multi-device synchronization.

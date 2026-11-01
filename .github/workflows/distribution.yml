@@ -92,6 +92,7 @@ jobs:
         working-directory: dist
         run: |
           {
+            echo "app-version=$(bun -p 'require("../package.json").version')"
             echo "source-commit=$GITHUB_SHA"
             echo "bun-revision=$(bun --revision)"
             printf 'bun-lock-sha256='
