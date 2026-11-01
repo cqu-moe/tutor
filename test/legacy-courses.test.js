@@ -137,6 +137,8 @@ async function fixture(t) {
   const originalLecture = JSON.parse(await readFile(path.join(courseDir, "output", "lecture.json"), "utf8"));
   const { stdout } = await run("pdftotext", [path.join(courseDir, "output", "document.pdf"), "-"]);
   assert.match(stdout, /Original Boolean algebra lecture/);
+  // Model the historical layout: ordinary exports did not yet bind chapters.
+  await rm(path.join(courseDir, "chapters"), { recursive: true });
   await rm(path.join(courseDir, "course.json"));
   return { root, dataDir, courseDir, common, env, pdf, originalLecture };
 }

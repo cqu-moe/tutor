@@ -3,6 +3,7 @@ import { access, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "nod
 import path from "node:path";
 import { readDraft, saveDraft } from "./lecture-state.ts";
 import type { Context } from "./types.ts";
+import { publishLecture, type Publication } from "./export.ts";
 
 export type ChapterProgress = "pending" | "in_progress" | "learned";
 
@@ -454,7 +455,8 @@ export function courseMaterialSignature(
   return createHash("sha256").update(JSON.stringify({
     sourceHash,
     sourcePages,
-    screenshots: screenshots.map((screenshot) => `${screenshot.name}:${screenshot.source}`),
+    screenshots: screenshots.map((screenshot) =>
+      path.basename(screenshot.source).match(/^screenshot-([a-f0-9]{64})\./)?.[1] ?? screenshot.source).sort(),
   })).digest("hex");
 }
 
@@ -465,7 +467,9 @@ export function hasCourseMaterial(
   screenshots: CourseMaterial["screenshots"],
 ) {
   const signature = courseMaterialSignature(sourceHash, sourcePages, screenshots);
-  return course.materials.some((material) => material.signature === signature);
+  // Recompute from retained provenance so signatures written by older versions
+  // (which included display names) still deduplicate without rewriting records.
+  return course.materials.some((material) => courseMaterialSignature(material.sourceHash, material.sourcePages, material.screenshots) === signature);
 }
 
 export async function addCourseMaterial(courseDir: string, admission: CourseMaterialAdmission, courseName?: string) {
@@ -562,6 +566,7 @@ export async function recordChapterLecture(
   const course = await readCourse(courseDir);
   const chapter = course.chapters.find((entry) => entry.id === chapterId);
   if (!chapter) throw new Error(`Unknown chapter: ${chapterId}`);
+  if (operationId && chapter.lecture.operationId === operationId) return;
   chapter.version += 1;
   chapter.lecture = {
     status: status === "published" ? "published" : chapter.lecture.status === "published" ? "published" : status,
@@ -570,6 +575,36 @@ export async function recordChapterLecture(
     ...(operationId ? { operationId } : {}),
   };
   await saveCourse(courseDir, course);
+}
+
+// Ordinary publications can cover several chapters. Retain the complete export
+// (including its original source scope), never pretend it is a chapter-only text.
+export async function bindCourseLecture(
+  courseDir: string,
+  course: CourseRecord,
+  lecture: import("./lecture-state.ts").Lecture,
+  publication: Publication,
+  operationId: string,
+  stage: string,
+  checkpoint: () => Promise<void>,
+) {
+  for (const chapter of course.chapters) {
+    if (chapter.status !== "pending" || chapter.lecture.status === "published" || chapter.needsConfirmation) continue;
+    const material = course.materials.find(entry => entry.id === chapter.source.materialId);
+    const pages = material?.pages.filter(page => page.sourcePage >= (chapter.source.startPage ?? 1)
+      && page.sourcePage <= (chapter.source.endPage ?? chapter.source.startPage ?? 1)) ?? [];
+    if (!pages.length || !pages.every(page => lecture.context.pages.some(source => source.pagePdf === page.pagePdf))
+      || !material!.screenshots.every(image => lecture.context.screenshots.some(source => source.source === image.source))) continue;
+    const candidate = path.join(stage, `chapter-${chapter.id}`);
+    const output = path.join(courseDir, "chapters", chapter.id, "output");
+    await rm(candidate, { recursive: true, force: true });
+    await cp(publication.output, candidate, { recursive: true });
+    await mkdir(path.dirname(output), { recursive: true });
+    // The admitted shared manifest also verifies each chapter copy. A crash
+    // after rename or binding reuses this same tree and operation identity.
+    await publishLecture({ candidate, output, previous: `${candidate}-previous`, expected: publication.expected, old: null }, checkpoint);
+    await recordChapterLecture(courseDir, chapter.id, "published", output, operationId);
+  }
 }
 
 export function chapterLine(chapter: CourseChapter, material?: CourseMaterial) {

@@ -345,7 +345,7 @@ function ImportCourse({
   const [file, setFile] = useState<File>();
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [createState, setCreateState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const lock = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -403,18 +403,19 @@ function ImportCourse({
       return;
     }
     lock.current = true;
-    setCreating(true);
+    setCreateState('loading');
     setError('');
     try {
       const created = await post('/api/courses', { name });
       const createdBody = await created.json();
+      setCreateState('success');
       refresh();
       navigate(`/courses/${encodeURIComponent(createdBody.id)}`);
     } catch (error) {
       setError((error as Error).message);
+      setCreateState('error');
     } finally {
       lock.current = false;
-      setCreating(false);
     }
   }
   return (
@@ -435,6 +436,7 @@ function ImportCourse({
                 maxLength={160}
                 placeholder="例如：数字逻辑设计"
                 autoComplete="off"
+                onChange={() => { setCreateState('idle'); setError(''); }}
               />
               <p className="hint">
                 同名课程会延续已有记录；新资料不会立即覆盖已导出的讲解稿。
@@ -544,14 +546,14 @@ function ImportCourse({
             <Button asChild variant="ghost">
               <Link to="/">返回课程</Link>
             </Button>
-            <Button
+            <ActionButton
               type="button"
               variant="outline"
-              disabled={active(state.job) || submitting || creating}
+              disabled={active(state.job) || submitting}
+              state={createState}
+              labels={{ idle: '先建立空课程', loading: '正在建立…', success: '已建立课程', error: '重试建立课程' }}
               onClick={(event) => void createEmpty(event)}
-            >
-              {creating ? '正在建立…' : '先建立空课程'}
-            </Button>
+            />
           </div>
         </form>
         <aside className="context-note">

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { prepareMaterials, pdfPageCount, selectChapter, parsePages, buildContext, chapterAdmissions } from './materials.ts';
-import { addCourseMaterial, courseMaterialSignature, hasCourseMaterial, lectureFromCourse, readCourse, recordChapterLecture, recordCourseDraft } from './course-state.ts';
+import { bindCourseLecture, addCourseMaterial, courseMaterialSignature, hasCourseMaterial, lectureFromCourse, readCourse, recordChapterLecture, recordCourseDraft } from './course-state.ts';
 import { readPublishedLecture, saveDraft } from './lecture-state.ts';
 import { prepareMemoryStore } from './memory-store.ts';
 import { hashFile, uncachedInputs } from './ocr.ts';
@@ -77,7 +77,7 @@ export async function runTeachingStep(options: {
     }
     const added = await addCourseMaterial(courseDir, { name: path.basename(input.pdf!), sourceHash: state.inputs![0].contentHash, sourcePages: state.pages!, pages: context.pages, screenshots: context.screenshots, chapters: state.admissions! }, input.course);
     const signature = courseMaterialSignature(state.inputs![0].contentHash, state.pages!, context.screenshots);
-    const material = added.course.materials.find(m => m.signature === signature);
+    const material = added.course.materials.find(m => courseMaterialSignature(m.sourceHash, m.sourcePages, m.screenshots) === signature);
     if (!material) throw new Error('Accepted material identity is missing from the course record');
     const lecture = lectureFromCourse(added.course, state.selection || material?.chapterIds.length === 1 ? material?.id : undefined);
     await persist({ ...state, phase: 'route', lecture, chapterIds: added.course.route.chapterIds, chapterTitles: added.course.chapters.map(c => c.title) });
@@ -120,12 +120,14 @@ export async function runTeachingStep(options: {
     await persist({ ...state, phase: 'export', source, sourceHash: await hashFile(source) });
   } else if (state.phase === 'export') {
     if (await hashFile(state.source!) !== state.sourceHash) throw new NeedsAttention('Validated generated source changed; inspect retained source before exporting', true);
+    const checkpoint = async () => { await persist({ ...state, publication: state.publication, reason: `Reconciling publication ${Date.now()}` }); };
     const output = await exportLecture(courseDir, state.source!, state.lecture!, outputDirectory, {
       stage: path.join(courseDir, `.export-${taskId}`), publication: state.publication,
       ready: async publication => { state.publication = publication; await persist({ ...state }); },
-      checkpoint: async () => { await persist({ ...state, publication: state.publication, reason: `Reconciling publication ${Date.now()}` }); },
+      checkpoint,
     });
     if (input.chapterId && course.chapters.find(c => c.id === input.chapterId)?.lecture.operationId !== taskId) await recordChapterLecture(courseDir, input.chapterId, 'published', output, taskId);
+    if (!input.chapterId) await bindCourseLecture(courseDir, course, state.lecture!, state.publication!, taskId, path.join(courseDir, `.export-${taskId}`), checkpoint);
     console.log(`Lecture ${input.action === 'revise' ? 'revised' : 'exported'}: ${output} (content.md, typst/document.typ, document.pdf, media/)`);
     return { output };
   } else if (state.phase === 'memory') {

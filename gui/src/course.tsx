@@ -15,6 +15,7 @@ import {
   TabsTrigger,
   TabsContent,
   toast,
+  type ActionButtonState,
 } from '@cqu-moe/ui';
 import {
   chapterFilePath,
@@ -124,13 +125,27 @@ function ChapterRow({
   chapter: GuiDetail['chapters'][number];
   routeConfirmed: boolean;
   disabled: boolean;
-  onProgress: (status: keyof typeof progressLabels) => void;
+  onProgress: (status: keyof typeof progressLabels) => Promise<void>;
   onGenerate: () => void;
   onDownload: (file: string) => void;
-  onResolveTitle: (title: string) => void;
+  onResolveTitle: (title: string) => Promise<void>;
   onRevise: (feedback: string) => Promise<void>;
 }) {
   const [feedback, setFeedback] = useState('');
+  const [progress, setProgress] = useState<{ status: keyof typeof progressLabels; state: ActionButtonState }>();
+  const [progressError, setProgressError] = useState('');
+  async function mark(status: keyof typeof progressLabels) {
+    if (disabled || progress?.state === 'loading') return;
+    setProgress({ status, state: 'loading' });
+    setProgressError('');
+    try {
+      await onProgress(status);
+      setProgress({ status, state: 'success' });
+    } catch (error) {
+      setProgress({ status, state: 'error' });
+      setProgressError((error as Error).message);
+    }
+  }
   return (
     <article className="chapter-row">
       <div className="chapter-main">
@@ -155,17 +170,18 @@ function ChapterRow({
         )}
         <div className="row chapter-actions" role="group" aria-label={`标记 ${chapter.title} 的学习进度`}>
           {(Object.keys(progressLabels) as Array<keyof typeof progressLabels>).map((status) => (
-            <Button
+            <ActionButton
               key={status}
               variant={chapter.status === status ? 'secondary' : 'outline'}
               size="sm"
-              disabled={disabled}
-              onClick={() => onProgress(status)}
-            >
-              {progressLabels[status]}
-            </Button>
+              disabled={disabled && !(progress?.status === status && progress.state === 'loading')}
+              state={progress?.status === status ? progress.state : 'idle'}
+              labels={{ idle: progressLabels[status], loading: '正在保存…', success: `已标记${progressLabels[status]}`, error: '重试标记' }}
+              onClick={() => void mark(status)}
+            />
           ))}
         </div>
+        {progressError && <p role="alert" className="error-text">{progressError}</p>}
       </div>
       <div className="chapter-side">
         {chapter.needsConfirmation ? (
@@ -288,7 +304,7 @@ export function Course({
     chapterId: string,
     status: keyof typeof progressLabels,
   ) {
-    if (lock.current || state.job?.status === 'running') return;
+    if (lock.current || state.job?.status === 'running') throw new Error('已有操作正在进行，请稍后重试。');
     lock.current = true;
     setSending(true);
     setError('');
@@ -296,15 +312,13 @@ export function Course({
       await setChapterProgress(id, chapterId, status);
       setReload((value) => value + 1);
       refresh();
-    } catch (error) {
-      setError((error as Error).message);
     } finally {
       lock.current = false;
       setSending(false);
     }
   }
   async function confirmChapterTitle(chapterId: string, title: string) {
-    if (lock.current || state.job?.status === 'running') return;
+    if (lock.current || state.job?.status === 'running') throw new Error('已有操作正在进行，请稍后重试。');
     lock.current = true;
     setSending(true);
     setError('');
@@ -312,8 +326,6 @@ export function Course({
       await setChapterTitle(id, chapterId, title);
       setReload((value) => value + 1);
       refresh();
-    } catch (error) {
-      setError((error as Error).message);
     } finally {
       lock.current = false;
       setSending(false);
@@ -422,7 +434,7 @@ export function Course({
                           routeConfirmed={course.confirmed}
                           disabled={sending || state.job?.status === 'running'}
                           onProgress={(status) =>
-                            void markProgress(chapter.id, status)
+                            markProgress(chapter.id, status)
                           }
                           onGenerate={() =>
                             void action({
@@ -436,7 +448,7 @@ export function Course({
                             void downloadChapter(chapter.id, file)
                           }
                           onResolveTitle={(title) =>
-                            void confirmChapterTitle(chapter.id, title)
+                            confirmChapterTitle(chapter.id, title)
                           }
                         />
                       ))}
@@ -631,29 +643,56 @@ function ChapterTitleForm({
 }: {
   initialTitle: string;
   disabled: boolean;
-  onResolve: (title: string) => void;
+  onResolve: (title: string) => Promise<void>;
 }) {
   const [title, setTitle] = useState(initialTitle);
+  const [error, setError] = useState('');
+  const [state, setState] = useState<ActionButtonState>('idle');
+  const lock = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
   const id = useId();
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (disabled || lock.current || !title.trim()) return;
+    lock.current = true;
+    setState('loading');
+    setError('');
+    try {
+      await onResolve(title);
+      setState('success');
+    } catch (error) {
+      setState('error');
+      setError((error as Error).message);
+      input.current?.focus();
+    } finally {
+      lock.current = false;
+    }
+  }
   return (
     <form
       className="chapter-title-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!disabled && title.trim()) onResolve(title);
-      }}
+      onSubmit={submit}
     >
       <Label htmlFor={id}>确认课件章节名</Label>
       <Input
         id={id}
+        ref={input}
+        name="title"
         value={title}
+        readOnly={state === 'loading'}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? `${id}-error` : undefined}
         maxLength={300}
         required
-        onChange={(event) => setTitle(event.target.value)}
+        onChange={(event) => {
+          setTitle(event.target.value);
+          setError('');
+          setState('idle');
+        }}
       />
-      <Button type="submit" variant="outline" disabled={disabled || !title.trim()}>
-        确认章节名
-      </Button>
+      {error && <p id={`${id}-error`} role="alert" className="error-text">{error}</p>}
+      <ActionButton type="submit" variant="outline" disabled={disabled && state !== 'loading'} state={state}
+        labels={{ idle: '确认章节名', loading: '正在确认…', success: '已确认章节名', error: '重试确认' }} />
     </form>
   );
 }

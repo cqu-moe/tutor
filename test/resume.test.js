@@ -355,7 +355,7 @@ test('a completed official model answer killed before teaching checkpoint is reu
   assert.match(await readFile(path.join(data,'logic','output','content.md'),'utf8'),/Stored complete answer/);
 });
 
-test('chapter publication killed after course binding but before terminal commit resumes once with the original chapter target', { timeout: 45000 }, async t => {
+for (const [selected, window] of [[true, 'bound'], [false, 'published'], [false, 'bound']]) test(`${selected ? 'chapter' : 'ordinary'} publication killed at ${window} boundary resumes once with the original chapter target`, { timeout: 45000 }, async t => {
   const { rename } = await import('node:fs/promises');
   const { existsSync } = await import('node:fs');
   const root = await mkdtemp(path.join(tmpdir(),'tutor-publish-completion-'));
@@ -367,7 +367,7 @@ test('chapter publication killed after course binding but before terminal commit
   const g = await gui(t,data,settings,env);
   const initial = await (await g.request('/api/state')).json();
   const chapterId = initial.courses[0].chapters[0].id;
-  const admitted = await g.request('/api/jobs',{ action:'generate',courseId:'logic',chapterId });
+  const admitted = await g.request('/api/jobs',{ action:'generate',courseId:'logic', ...(selected ? { chapterId } : {}) });
   assert.equal(admitted.status,202);
   const accepted = await admitted.json();
   const stage = path.join(course,`.export-${accepted.id}`), file = path.join(course,'course.json'), backup = path.join(course,'.original-course.json');
@@ -382,25 +382,40 @@ test('chapter publication killed after course binding but before terminal commit
   t.after(() => writer.kill('SIGKILL'));
   await new Promise(resolve => writer.stdout.once('data',resolve));
   assert.ok(existsSync(path.join(course,'chapters',chapterId,'output','document.pdf')));
-  const locker = spawn('/usr/bin/sqlite3',[path.join(data,'.teaching','tasks.sqlite')]);
-  t.after(() => locker.kill('SIGKILL'));
-  locker.stdin.write('.timeout 5000\nBEGIN IMMEDIATE;\n.print terminal-blocked\n');
-  await new Promise(resolve => locker.stdout.once('data',resolve));
-  await rm(file); await rename(backup,file);
-  writer.stdin.end(original); await new Promise(resolve => writer.once('exit',resolve));
-  await until(async () => { const detail = await (await g.request('/api/courses/logic')).json(); return detail.chapters.find(c => c.id === chapterId).lecture.status === 'published'; }, 'chapter effect not visible through HTTP');
-  const committed = JSON.parse(await readFile(file,'utf8')).chapters.find(c => c.id === chapterId);
-  g.child.kill('SIGKILL'); await g.exited;
-  locker.stdin.end('ROLLBACK;\n.quit\n'); await new Promise(resolve => locker.once('exit',resolve));
+  let committed;
+  if (window === 'published') {
+    assert.equal(JSON.parse(original).chapters.find(c => c.id === chapterId).lecture.status, 'none');
+    // The real export is published, but course.json is still blocked at its
+    // binding read. Kill before that effect and recover from the saved manifest.
+    g.child.kill('SIGKILL'); await g.exited;
+    writer.kill('SIGKILL'); await new Promise(resolve => writer.once('exit', resolve));
+    await rm(file); await rename(backup, file);
+  } else {
+    const locker = spawn('/usr/bin/sqlite3', [path.join(data, '.teaching', 'tasks.sqlite')]);
+    t.after(() => locker.kill('SIGKILL'));
+    locker.stdin.write('.timeout 5000\nBEGIN IMMEDIATE;\n.print terminal-blocked\n');
+    await new Promise(resolve => locker.stdout.once('data', resolve));
+    await rm(file); await rename(backup, file);
+    writer.stdin.end(original); await new Promise(resolve => writer.once('exit', resolve));
+    await until(async () => { const detail = await (await g.request('/api/courses/logic')).json(); return detail.chapters.find(c => c.id === chapterId).lecture.status === 'published'; }, 'chapter effect not visible through HTTP');
+    committed = JSON.parse(await readFile(file, 'utf8')).chapters.find(c => c.id === chapterId);
+    g.child.kill('SIGKILL'); await g.exited;
+    locker.stdin.end('ROLLBACK;\n.quit\n'); await new Promise(resolve => locker.once('exit', resolve));
+  }
   const resumed = await cli(['--data-dir',data,'--task-id',accepted.id,'--resume'],env).exited;
   assert.equal(resumed.code,0,resumed.stderr); assert.equal(calls,1);
   const after = JSON.parse(await readFile(file,'utf8')).chapters.find(c => c.id === chapterId);
-  assert.deepEqual(after,committed,'the already committed chapter binding/version is not repeated');
+  if (committed) assert.deepEqual(after, committed, 'the already committed chapter binding/version is not repeated');
+  else assert.equal(after.version, JSON.parse(original).chapters.find(c => c.id === chapterId).version + 1);
+  const again = await cli(['--data-dir', data, '--task-id', accepted.id, '--resume'], env).exited;
+  assert.equal(again.code, 0, again.stderr);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).chapters.find(c => c.id === chapterId), after);
   assert.equal(after.lecture.operationId,accepted.id);
   const reopened = await gui(t,data,[],env);
   const detail = await (await reopened.request('/api/courses/logic')).json();
   assert.match(detail.chapters.find(c => c.id === chapterId).lecture.content,/Original chapter target/);
-  assert.equal(detail.content,'','chapter publication does not publish the whole course');
+  if (selected) assert.equal(detail.content, '', 'chapter publication does not publish the whole course');
+  else assert.match(detail.content, /Original chapter target/);
 });
 
 test('retryable model failures stop at the official bounded policy and leave an actionable paused task', { timeout: 45000 }, async t => {
@@ -534,4 +549,113 @@ test('same PDF with a changed screenshot binds the newly admitted material inste
   assert.equal((await (await g.request('/api/state')).json()).courses[0].materials,2);
   const last = JSON.stringify(requests.at(-1).messages);
   assert.ok(last.includes(images[1].toString('base64')) && !last.includes(images[0].toString('base64')),'the route model receives the newly admitted screenshot, not the previous PDF match');
+  // Stored signatures from before content-only identity remain valid inputs.
+  const file = path.join(data, 'logic', 'course.json');
+  const legacy = JSON.parse(await readFile(file, 'utf8'));
+  const { createHash } = await import('node:crypto');
+  for (const material of legacy.materials) material.signature = createHash('sha256').update(JSON.stringify({
+    sourceHash: material.sourceHash, sourcePages: material.sourcePages,
+    screenshots: material.screenshots.map(image => `${image.name}:${image.source}`),
+  })).digest('hex');
+  await writeFile(file, JSON.stringify(legacy));
+  const form = new FormData();
+  form.set('course', 'Logic'); form.set('selectionMode', 'chapter'); form.set('selection', 'Logic gates');
+  form.set('pdf', new Blob([await readFile(source)], { type: 'application/pdf' }), 'logic.pdf');
+  form.append('screenshots', new Blob([images[1]], { type: 'image/png' }), 'renamed.png');
+  const renamed = await g.upload(form); assert.equal(renamed.status, 202);
+  const duplicate = await renamed.json();
+  const repeated = await until(async () => {
+    const state = await (await g.request('/api/state')).json();
+    return state.tasks.find(task => task.id === duplicate.id && task.status !== 'running');
+  }, 'renamed duplicate did not settle');
+  assert.equal(repeated.status, 'succeeded', 'identical renamed screenshot must deduplicate without a new route');
+  let state = await (await g.request('/api/state')).json();
+  assert.equal(state.courses[0].materials, 2, 'GUI rename alone must not add material');
+  assert.equal(state.courses[0].chapters.length, 2, 'GUI rename alone must not add a chapter');
+  assert.equal(requests.length, 2, 'renamed duplicate must not ask for a new route');
+  g.child.kill('SIGKILL'); await g.exited;
+  const renamedFile = path.join(root, 'renamed-again.png');
+  await writeFile(renamedFile, images[1]);
+  const repeat = await cli(['--data-dir', data, '--course', 'Logic', '--pdf', source, '--chapter', 'Logic gates', '--screenshots', renamedFile,
+    '--ocr', 'mistral', '--mistral-base-url', ocr, ...settings], env).exited;
+  assert.equal(repeat.code, 0, repeat.stderr);
+  assert.match(repeat.stdout, /No new material/);
+  const stored = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(stored.materials.length, 2);
+  assert.equal(stored.chapters.length, 2);
+  assert.equal(stored.materials[1].screenshots[0].name, 'question.png', 'original filename remains provenance');
+  assert.equal(requests.length, 2);
+});
+
+test('ordinary CLI imports keep covered chapter lectures and GUI downloads unchanged after protected progress and append', { timeout: 90000 }, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tutor-ordinary-binding-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const data = path.join(root, 'data'), course = path.join(data, 'logic');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const compile = async (name, text) => {
+    const file = path.join(root, name);
+    await writeFile(file + '.typ', '#set page(width: 10cm, height: 3cm)\n' + text);
+    await promisify(execFile)('typst', ['compile', file + '.typ', file + '.pdf']);
+    return file + '.pdf';
+  };
+  const first = await compile('first', '= Gates\nAND and OR.\n#pagebreak()\n= Latches\nStored state.');
+  const next = await compile('next', '= Registers\nClocked state.');
+  const ocr = await server(t, async (req, res) => { await payload(req); res.end(JSON.stringify({ pages: [{ index: 0, markdown: 'Digital logic teaching material.' }] })); });
+  let generations = 0;
+  const model = await server(t, async (req, res) => {
+    const p = await payload(req), messages = JSON.stringify(p.messages);
+    if (messages.includes('Write the complete lecture')) {
+      generations++;
+      return answer(res, generations === 1 ? '# Gates and Latches\n\nAND requires both inputs. A latch stores a state.' : '# Registers\n\nA register stores a clocked state.');
+    }
+    const content = p.messages.findLast(m => m.role === 'user').content;
+    const text = typeof content === 'string' ? content : content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+    const titles = [...text.matchAll(/^\d+\.\s+(.+)$/gm)].map(match => match[1]);
+    answer(res, '## Teaching order\n' + titles.map((title, index) => `${index + 1}. ${title}`).join('\n'));
+  });
+  const settings = await modelConfig(root, model);
+  const env = { ...process.env, PI_MEMORY_DIR: path.join(root, 'memory'), MISTRAL_API_KEY: 'fixture-only' };
+  const common = ['--data-dir', data, '--course', 'Logic', '--ocr', 'mistral', '--mistral-base-url', ocr, ...settings];
+  const imported = await cli([...common, '--pdf', first, '--pages', '1-2'], env, 'confirm\ndone\n').exited;
+  assert.equal(imported.code, 0, imported.stdout + imported.stderr);
+  const initial = JSON.parse(await readFile(path.join(course, 'course.json'), 'utf8'));
+  assert.equal(initial.chapters.length, 2);
+  for (const chapter of initial.chapters) assert.equal(chapter.lecture.status, 'published', `ordinary import must bind ${chapter.title}`);
+  // This is a combined lecture, not an invented per-chapter explanation.
+  for (const chapter of initial.chapters) {
+    const manifest = JSON.parse(await readFile(path.join(chapter.lecture.output, 'lecture.json'), 'utf8'));
+    assert.equal(manifest.context.selection, undefined);
+    assert.equal(manifest.context.pages.length, 2);
+  }
+  for (const [index, status] of ['learned', 'in_progress'].entries()) {
+    const marked = await cli([...common, '--chapter-id', initial.chapters[index].id, '--progress', status], env).exited;
+    assert.equal(marked.code, 0, marked.stderr);
+  }
+  const protectedChapters = JSON.parse(await readFile(path.join(course, 'course.json'), 'utf8')).chapters;
+  const tree = async directory => {
+    const files = await readdir(directory, { recursive: true, withFileTypes: true });
+    return Object.fromEntries(await Promise.all(files.filter(f => f.isFile()).map(async f => {
+      const file = path.join(f.parentPath, f.name);
+      return [path.relative(directory, file), (await readFile(file)).toString('base64')];
+    })));
+  };
+  const snapshots = await Promise.all(protectedChapters.map(chapter => tree(chapter.lecture.output)));
+  const appended = await cli([...common, '--pdf', next, '--pages', '1'], env, 'confirm\ndone\n').exited;
+  assert.equal(appended.code, 0, appended.stdout + appended.stderr);
+  const after = JSON.parse(await readFile(path.join(course, 'course.json'), 'utf8'));
+  assert.deepEqual(after.chapters.slice(0, 2), protectedChapters, 'append must not alter learned or in-progress chapter records');
+  for (const [index, chapter] of protectedChapters.entries()) assert.deepEqual(await tree(chapter.lecture.output), snapshots[index]);
+  assert.equal(after.chapters[2].lecture.status, 'published');
+  assert.equal(generations, 2);
+  const g = await gui(t, data, [], env);
+  const detail = await (await g.request('/api/courses/logic')).json();
+  assert.match(detail.content, /Registers/);
+  for (const chapter of protectedChapters) {
+    const listed = detail.chapters.find(c => c.id === chapter.id);
+    assert.match(listed.lecture.content, /Gates and Latches/);
+    const download = await g.request(`/api/courses/logic/chapters/${chapter.id}/files/document.pdf`);
+    assert.equal(download.status, 200);
+    assert.equal(Buffer.from(await download.arrayBuffer()).toString('base64'), snapshots[protectedChapters.indexOf(chapter)]['document.pdf']);
+  }
 });

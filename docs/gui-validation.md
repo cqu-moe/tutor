@@ -1,6 +1,36 @@
 # GUI 验收记录
 
-## 0.2.0 教学任务验收（2026-11-02）
+## 0.2.0 最终审查修复验收（2026-11-02）
+
+主集成执行者独立使用 Ego Lite / Chromium 和搬移后的 macOS ARM64 原生程序验证了本次修改。课程写入、GUI HTTP、磁盘状态及刷新读回为实际执行；歧义章节为合成 fixture，模型/OCR 为 localhost 响应。通过 CDP 增加 4 秒传输延迟观察待完成状态，没有替换业务响应。下方旧记录仅证明各自基线，不能单独验证本次 GUI 修改。
+
+- 旧版重名提交没有字段关联，编辑后残留页面错误。本次错误聚焦章节名输入，并通过 `aria-invalid`、`aria-describedby` 关联行内说明；编辑后清除错误。真实保存时输入只读、按钮 `aria-busy=true`，焦点保留，成功后的章节名经刷新确认。后端重名文案仍为「请求格式无效。」，本次修复的是字段关联和反馈生命周期。
+- 任务尚待确认时标记进度，实际冲突显示为行内错误与重试状态；取消任务后，进度写入成功并经刷新保留。进度、取消和空课程创建均实际观察到忙碌按钮与焦点保留，成功结果经页面重载读回；创建后进入新课程。没有用待完成状态或演示计时器冒充成功。
+- 章节错误、待确认任务和已取消任务共 24 张矩阵截图均已查看，所有宽度均无横向溢出。待确认截图有部分主题过渡帧，未纳入本次提交；下表保留章节错误和等待有限 CSS 动画结束后重拍的已取消截图，共 16 张。
+- 768/390/320px 使用粗指针模拟，操作高度至少 44px、章节输入字号 16px；1440px 细指针保持共享组件的 32/40px 尺寸。320px 减少动态效果下导航可由 Escape 关闭，焦点返回「打开导航」。
+
+| 宽度 | 章节名错误 | 已取消任务（稳定主题） |
+| --- | --- | --- |
+| 1440px | [浅色](gui/screenshots/review-fixes/title-error-1440-light.png) / [深色](gui/screenshots/review-fixes/title-error-1440-dark.png) | [浅色](gui/screenshots/review-fixes/task-cancelled-1440-light.png) / [深色](gui/screenshots/review-fixes/task-cancelled-1440-dark.png) |
+| 768px | [浅色](gui/screenshots/review-fixes/title-error-768-light.png) / [深色](gui/screenshots/review-fixes/title-error-768-dark.png) | [浅色](gui/screenshots/review-fixes/task-cancelled-768-light.png) / [深色](gui/screenshots/review-fixes/task-cancelled-768-dark.png) |
+| 390px | [浅色](gui/screenshots/review-fixes/title-error-390-light.png) / [深色](gui/screenshots/review-fixes/title-error-390-dark.png) | [浅色](gui/screenshots/review-fixes/task-cancelled-390-light.png) / [深色](gui/screenshots/review-fixes/task-cancelled-390-dark.png) |
+| 320px | [浅色](gui/screenshots/review-fixes/title-error-320-light.png) / [深色](gui/screenshots/review-fixes/title-error-320-dark.png) | [浅色](gui/screenshots/review-fixes/task-cancelled-320-light.png) / [深色](gui/screenshots/review-fixes/task-cancelled-320-dark.png) |
+
+待完成状态另见 [取消任务](gui/screenshots/review-fixes/task-cancelling-320-dark.png)、[保存进度](gui/screenshots/review-fixes/progress-saving-320-dark.png)。章节保存和空课程创建的待完成断言来自 DOM 读回及成功后刷新验证；没有使用误命名的章节保存截图或未拍到提交按钮的创建截图证明忙碌状态。
+
+本次验收源码 SHA256：
+
+| 路径 | SHA256 |
+| --- | --- |
+| `gui/src/course.tsx` | `bcb2d821029b04b52e77ae958e04a8564fa5a86c2516d77a33f665d7a9475c31` |
+| `gui/src/main.tsx` | `2a498b4ef283cda90165e333067375e076ddd1812a2e72e723b69d6f209daae7` |
+| `gui/src/status.tsx` | `f885619d4e274db4c4b8975ece208ccaf212298862f5d0aae9192ad7680950f8` |
+
+原生程序 SHA256 为 `4e200d79eead832ef5b1474c8d1a930dd675c1235a3d28a59f84c1d1ca827ed4`，GUI bundle 为 `index-DD5UxrYa.js`。同一修复的完整源码测试 51/51、移除构建依赖后的 macOS ARM64 相关原生测试 27/27、四目标构建、GUI 类型及设计检查通过；新增公共 CLI/GUI 回归验证普通导入的章节讲解与下载、受保护章节全部导出字节、截图改名去重及发布中断幂等性。
+
+这是 Chromium 桌面与触屏/减少动态效果模拟证据；未验证真实手机、屏幕阅读器、Safari/Firefox 或真实模型/OCR 账户。其他三个目标仅在本地完成编译，新的 Linux 原生 CI 与正式发布由后续集成负责。当前浏览器证据及 DOM 收据保存在本地 `.build/verification/gui-review-fixes.md` 与 `.build/gui-review-qa/`。
+
+## 0.2.0 教学任务基线验收（2026-11-02）
 
 主集成执行者在 #18 最终界面上使用 Ego Lite / Chromium 完成以下实际操作；#19 复用此证据，没有重复浏览器验收或修改 GUI 源码。模型/OCR 来自 localhost fixture，课程文件、官方 Pi 任务、导出和浏览器下载为真实执行。
 

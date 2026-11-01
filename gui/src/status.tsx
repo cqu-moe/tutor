@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { post } from './api';
 import { Link } from 'react-router';
 import { ArrowRight } from 'lucide-react';
-import { Alert, AlertTitle, AlertDescription, Button } from '@cqu-moe/ui';
+import { Alert, AlertTitle, AlertDescription, Button, ActionButton, type ActionButtonState } from '@cqu-moe/ui';
 import type { GuiCourse, GuiJob } from './api';
 
 export const active = (job?: GuiJob | null) =>
@@ -63,15 +63,16 @@ export function JobStatus({
   courseId?: string;
   refresh?: () => void;
 }) {
-  const [sending, setSending] = useState(false);
+  const [decision, setDecision] = useState<{ action: 'retry' | 'cancel'; state: ActionButtonState }>();
+  useEffect(() => { setDecision(undefined); setError(''); }, [job.id]);
   const [error, setError] = useState('');
   const lock = useRef(false);
-  async function decide(body: Record<string, unknown>) {
+  async function decide(action: 'retry' | 'cancel') {
     if (lock.current) return;
-    lock.current = true; setSending(true); setError('');
-    try { await post('/api/jobs/input', { id: job.id, ...body }); refresh?.(); }
-    catch (error) { setError((error as Error).message); }
-    finally { lock.current = false; setSending(false); }
+    lock.current = true; setDecision({ action, state: 'loading' }); setError('');
+    try { await post('/api/jobs/input', { id: job.id, [action]: true }); setDecision({ action, state: 'success' }); refresh?.(); }
+    catch (error) { setDecision({ action, state: 'error' }); setError((error as Error).message); }
+    finally { lock.current = false; }
   }
   return (
     <section className="job-status" aria-label="任务状态">
@@ -101,8 +102,8 @@ export function JobStatus({
       {job.status === 'needs-attention' && <p>{job.log}</p>}
       {refresh && ['running', 'awaiting-route', 'needs-attention'].includes(job.status) && (
         <div className="row">
-          {job.canRetry && <Button variant="outline" disabled={sending} onClick={() => void decide({ retry: true })}>继续原任务</Button>}
-          <Button variant="outline" disabled={sending} onClick={() => void decide({ cancel: true })}>取消任务</Button>
+          {job.canRetry && <ActionButton variant="outline" state={decision?.action === 'retry' ? decision.state : 'idle'} disabled={decision?.state === 'loading' && decision.action !== 'retry'} labels={{ idle: '继续原任务', loading: '正在继续…', success: '已接纳继续', error: '重试继续' }} onClick={() => void decide('retry')} />}
+          <ActionButton variant="outline" state={decision?.action === 'cancel' ? decision.state : 'idle'} disabled={decision?.state === 'loading' && decision.action !== 'cancel'} labels={{ idle: '取消任务', loading: '正在取消…', success: '已接纳取消', error: '重试取消' }} onClick={() => void decide('cancel')} />
         </div>
       )}
       {error && <p role="alert" className="error-text">{error}</p>}
