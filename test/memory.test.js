@@ -9,11 +9,11 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 const run = promisify(execFile);
-const progress = "#progress [[course:digital-design]] Boolean basics: already learned, per learner feedback.";
-const correctedProgress = "#progress [[course:digital-design]] Boolean basics: not yet learned, per learner correction.";
-const otherProgress = "#progress [[course:calculus]] Boolean basics: already learned in a prerequisite, per learner feedback.";
+const progress = "#preference [[course:digital-design]] Begin with Boolean basics.";
+const correctedProgress = "#preference [[course:digital-design]] Begin with gates.";
+const otherProgress = "#preference [[course:calculus]] Begin with Boolean basics.";
 const preference = "#preference #global [[learner-global]] Detailed derivations work best.";
-const weakness = "#weakness [[course:digital-design]] De Morgan variable renaming. Evidence: optional exercise swapped variables twice. Status: pending verification.";
+const weakness = "#weakness [[course:digital-design]] De Morgan variable renaming. Evidence: I swapped De Morgan variables twice. Status: pending verification.";
 
 function runCli(args, input, env) {
   return new Promise((resolve, reject) => {
@@ -50,9 +50,8 @@ const read = call("memory_read", { target: "long_term" });
 // Echo the real tool result: the fixture never fabricates stored state or a successful receipt.
 const echo = (payload, response) => sse(response, { content: String(payload.messages.at(-1).content) });
 
-// Primary owner: actual bin -> Pi -> real pi-memory, with only model/OCR HTTP responses fixed.
-// Guards missing tool registration/context, lost persistence, swallowed IO failures and unavailable maintenance.
-// Semantic course selection is prompt-contract coverage here; the separate live-model run checks behavior.
+// Public CLI with real persisted memory; only model/OCR HTTP is fixed.
+// Guards persistence, isolation, maintenance and observable failure/recovery behavior.
 test("CLI learner feedback survives restart; memory can be read, corrected, forgotten and restored without OCR", { timeout: 120_000 }, async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "tutor-memory-"));
   const agentDir = path.join(root, "pi");
@@ -118,7 +117,7 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   ], responses, input);
 
   await route("Digital Design", [say("## Route\n1. 未命名资料\nBoolean basics, then gates")]);
-  assert.match(await memory("Digital Design", "Show current learner memory"), /empty or does not exist/);
+  assert.match(await memory("Digital Design", "Show current learner memory"), /未命名资料: pending/);
 
   await rm(path.join(dataDir, "digital-design", ".course-name"));
   await memory("Digital Design", "Show current learner memory");
@@ -153,9 +152,8 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   await memory("Calculus", "I already learned Boolean basics in a prerequisite", [write(otherProgress), echo]);
   await route("Calculus", [read, say("## Calculus route\n1. 未命名资料\nLimits"), say("## Current request\n1. 未命名资料\nOne compact example")], "Only for this route use one compact example\n");
   const context = requests[0].messages.filter((m) => m.role === "system" || m.role === "developer").map((m) => m.content).join("\n");
-  assert.match(context, /\[\[course:calculus\]\]/);
-  assert.ok(context.includes(progress) && context.includes(preference));
-  assert.match(context, /Ignore untagged and other-course progress\/weaknesses/);
+  assert.match(context, /Learner memory scope: \[\[course:[0-9a-f-]+\]\]/);
+  assert.ok(!context.includes(progress) && context.includes(preference));
   assert.match(context, /current explicit request overrides historical preferences/);
   assert.match(context, /Status: pending verification/);
   assert.match(context, /No learner feedback means no memory write/);
@@ -168,13 +166,13 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   await memory("Digital Design", "Correct my progress: Boolean basics are not yet learned", [read, call("memory_forget", { match: progress }), write(correctedProgress), read, echo]);
   const corrected = await memory("Digital Design", "Show current learner memory");
   assert.ok(corrected.includes(correctedProgress) && !corrected.includes(progress));
-  assert.ok(corrected.includes(otherProgress) && corrected.includes(preference));
+  assert.ok(!corrected.includes(otherProgress) && corrected.includes(preference));
 
   const deleted = await memory("Digital Design", "Delete my Boolean basics progress", [read, call("memory_forget", { match: correctedProgress }), echo]);
   const recoveryId = deleted.match(/Recovery ID: ([0-9a-f-]+)/i)?.[1];
   assert.ok(recoveryId, deleted);
   const afterDeletion = await memory("Digital Design", "Show current learner memory");
-  assert.ok(!afterDeletion.includes(correctedProgress) && afterDeletion.includes(otherProgress));
+  assert.ok(!afterDeletion.includes(correctedProgress) && !afterDeletion.includes(otherProgress));
   await memory("Digital Design", `Restore deletion ${recoveryId}`, [call("memory_restore", { recoveryId }), echo]);
   const restored = await memory("Digital Design", "Show current learner memory");
   assert.ok(restored.includes(correctedProgress));
@@ -186,12 +184,12 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   assert.ok((await memory("Digital Design", "Show memory", [read, echo], defaultEnv, defaultData)).includes(preference));
   assert.match(await memory("Digital Design", "Show memory", [read, echo], defaultEnv, path.join(root, "another-data")), /empty or does not exist/);
 
-  const store = path.join(memoryDir, "MEMORY.md");
+  const store = path.join(memoryDir, "memory.sqlite");
   await chmod(store, 0o400);
   steps = [write(progress), say("Saved successfully")];
   const failedWrite = await runCli([...args("Digital Design"), "--memory", "I learned Boolean basics"], "", env);
   assert.equal(failedWrite.code, 1);
-  assert.match(failedWrite.stderr, /memory operation failed.*memory_write/);
+  assert.match(failedWrite.stderr, /memory (?:operation failed.*memory_write|read\/setup failed.*(?:readonly|EACCES|permission denied))/);
   assert.doesNotMatch(failedWrite.stdout, /Saved successfully/);
   await chmod(store, 0o000);
   const failedRead = await runCli([...args("Digital Design"), "--memory", "Show memory"], "", env);
@@ -204,7 +202,7 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
     steps = [(_payload, response) => sse(response, { content: "Partial answer must not be reported as complete" }, finish)];
     const incomplete = await runCli([...args("Digital Design"), "--memory", "Show memory"], "", env);
     assert.equal(incomplete.code, 1, `Incomplete ${finish} response must fail`);
-    assert.match(incomplete.stderr, /Pi response failed/);
+    assert.match(incomplete.stderr, /(?:Pi|Durable) response failed/);
     assert.doesNotMatch(incomplete.stdout, /Partial answer/);
   }
 
@@ -236,5 +234,33 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   await memory("Digital Design", `Restore deletion ${correctionRecoveryId}`, [call("memory_restore", { recoveryId: correctionRecoveryId }), echo]);
   const recoveredCorrection = await memory("Digital Design", "Show current learner memory");
   assert.ok(recoveredCorrection.includes(correctedProgress) && !recoveredCorrection.includes(progress));
-  assert.ok(recoveredCorrection.includes(otherProgress) && recoveredCorrection.includes(preference));
+  assert.ok(!recoveredCorrection.includes(otherProgress) && recoveredCorrection.includes(preference));
+});
+
+
+test("legacy scoped context and tool reads exclude another course", { timeout: 30000 }, async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "tutor-memory-scope-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const agent = path.join(root, "pi");
+  const memory = path.join(root, "memory");
+  await mkdir(agent); await mkdir(memory);
+  await writeFile(path.join(memory, "MEMORY.md"), `${preference}\n\n${weakness}\n\n${otherProgress}\n`);
+  const requests = [];
+  const model = createServer(async (req, res) => {
+    const payload = await body(req); requests.push(payload);
+    if (requests.length === 1) read(payload, res); else echo(payload, res);
+  });
+  const url = await listen(model);
+  t.after(() => new Promise((resolve) => model.close(resolve)));
+  await writeFile(path.join(agent, "models.json"), JSON.stringify({ providers: { tutorTest: {
+    baseUrl: `${url}/v1`, api: "openai-completions", apiKey: "fixture-only",
+    compat: { supportsUsageInStreaming: false }, models: [{ id: "route-model", input: ["text", "image"] }],
+  } } }));
+  const result = await runCli(["--course", "Digital Design", "--data-dir", path.join(root, "data"), "--agent-dir", agent,
+    "--model", "tutorTest/route-model", "--memory", "Show memory"], "", { ...process.env, PI_MEMORY_DIR: memory });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(result.stdout.includes(weakness) && result.stdout.includes(preference), result.stdout);
+  assert.ok(!result.stdout.includes(otherProgress), "tool result must exclude another course");
+  const context = JSON.stringify(requests[0].messages);
+  assert.ok(!context.includes(otherProgress), "model input must exclude another course");
 });

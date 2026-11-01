@@ -1,30 +1,18 @@
 import { copyFile, cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { promptWithMemory } from "./memory.ts";
 import { selectionScope } from "./selection.ts";
 import { createTutorSession, imageContent } from "./runtime.ts";
 import type { Lecture } from "./lecture-state.ts";
 
-async function persistedSession(courseDir: string) {
-  const sessionDir = path.join(courseDir, ".sessions");
-  const pointer = path.join(courseDir, "revision-session.json");
+async function validateLegacyPointer(courseDir: string) {
   try {
-    const state = JSON.parse(await readFile(pointer, "utf8")) as { sessionFile?: unknown };
-    if (typeof state.sessionFile !== "string") throw new Error("sessionFile must be a string");
-    if (!state.sessionFile || path.isAbsolute(state.sessionFile)) throw new Error("sessionFile must be a relative path inside .sessions");
-    const file = path.resolve(sessionDir, state.sessionFile);
-    const relative = path.relative(sessionDir, file);
+    const state = JSON.parse(await readFile(path.join(courseDir, "revision-session.json"), "utf8"));
+    if (typeof state.sessionFile !== "string" || !state.sessionFile || path.isAbsolute(state.sessionFile)) throw new Error("sessionFile must be a relative path inside .sessions");
+    const relative = path.relative(path.join(courseDir, ".sessions"), path.resolve(courseDir, ".sessions", state.sessionFile));
     if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("sessionFile must stay inside .sessions");
-    return SessionManager.open(file, sessionDir, courseDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    const manager = SessionManager.create(courseDir, sessionDir);
-    const file = manager.getSessionFile();
-    if (!file) throw new Error("Pi did not create a persistent revision session");
-    await writeFile(pointer, `${JSON.stringify({ sessionFile: path.relative(sessionDir, file) }, null, 2)}\n`);
-    return manager;
-  }
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  // Retain valid legacy files, but never reopen their unscoped tool transcript.
 }
 
 function occurrences(value: string, pattern: RegExp) {
@@ -78,6 +66,7 @@ export async function reviseLecture(
   }
   if (!original.trim()) throw new Error("The existing lecture is empty; regenerate it before revising");
 
+  await validateLegacyPointer(courseDir);
   const stage = await mkdtemp(path.join(courseDir, ".revision-"));
   const source = path.join(stage, "content.md");
   let session;
@@ -88,7 +77,7 @@ export async function reviseLecture(
       if (error.code !== "ENOENT") throw error;
     });
     session = await createTutorSession(courseDir, agentDir, model, {
-      sessionManager: await persistedSession(courseDir),
+      learnerFeedback: feedback,
       systemPrompt: "Revise an existing lecture with the smallest precise edit. Do not rewrite untouched sections, headings, media references, citations, or formula conditions. Never infer learning progress from a revision.",
       tools: ["read", "edit", "grep", "find"],
       writeRoot: stage,

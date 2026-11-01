@@ -14,8 +14,7 @@ import { generateLecture } from "./lecture.ts";
 import { parseWithMinerU } from "./mineru.ts";
 import { parseWithMistral } from "./mistral.ts";
 import { createTerminalInput, proposeRoute } from "./model.ts";
-import { createTutorSession } from "./runtime.ts";
-import { promptWithMemory } from "./memory.ts";
+import { prepareMemoryStore } from "./memory-store.ts";
 import { reviseLecture } from "./revision.ts";
 import { readDraft, readPublishedLecture, saveDraft, type Lecture } from "./lecture-state.ts";
 import {
@@ -421,12 +420,22 @@ async function main() {
     if (!values.memory.trim()) throw new Error("--memory requires a learner-memory request");
     await claimCourseDirectory(course, courseDir);
     await ensureCourse(courseDir, course);
-    const session = await createTutorSession(courseDir, values["agent-dir"], values.model, { tools: [] });
+    const { openTutorDurableSession } = await import("./durable.ts");
+    const session = await openTutorDurableSession({ courseDir, agentDir: values["agent-dir"], model: values.model, channel: "memory" });
     try {
-      console.log(await promptWithMemory(session, `Course: ${course}\nLearner memory request: ${values.memory}`));
-    } finally {
-      session.dispose();
-    }
+      if (values.resume) {
+        const answer = await session.resumeSubmission("", "memory-maintenance");
+        if (!answer) throw new Error("No admitted memory request to resume");
+        console.log(answer.text);
+      } else {
+        await session.reset();
+        const receipt = await session.submit({
+          content: [{ type: "text", text: `Course: ${course}\nLearner memory request: ${values.memory}` }],
+          requestId: randomUUID(), resumeKey: "memory-maintenance", learnerFeedback: values.memory,
+        });
+        console.log((await session.wait(receipt.submissionId)).text);
+      }
+    } finally { await session.close(); }
     return;
   }
   if (values.generate) {
@@ -452,6 +461,7 @@ async function main() {
     if (values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--resume uses the saved teaching route; omit new input options");
     await claimCourseDirectory(course, courseDir);
     await ensureCourse(courseDir, course);
+    await prepareMemoryStore(courseDir);
     lecture = await readDraft(courseDir);
     if (lecture.context.confirmedAt) throw new Error("Route is already confirmed; use --generate");
   } else {
@@ -473,6 +483,9 @@ async function main() {
     const pages = chapter ? chapter.pages : parsePages(values.pages, pageCount);
     await claimCourseDirectory(course, courseDir);
     await ensureCourse(courseDir, course);
+    // Migrate progress against saved chapters, before provisional material can
+    // introduce targets that a rejected route will roll back.
+    await prepareMemoryStore(courseDir);
     await readPublishedLecture(courseDir);
     const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
     const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");

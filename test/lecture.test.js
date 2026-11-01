@@ -210,7 +210,8 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   await run("typst", ["compile", "--root", ".", "--font-path", "typst/fonts", "typst/document.typ", path.join(root, "rebuilt.pdf")], { cwd: output });
   const learnerMemory = await runCli([...common, "--memory", "Show my learner memory"], "", env);
   assert.equal(learnerMemory.code, 0, learnerMemory.stderr);
-  assert.match(learnerMemory.stdout, /empty or does not exist/, "generation without learner feedback must not create memory facts");
+  assert.match(learnerMemory.stdout, /Chapter One: pending/, "generation leaves chapter progress pending");
+  assert.doesNotMatch(learnerMemory.stdout, /#preference|#weakness|: learned|: in_progress/, "generation without learner feedback must not create facts or learning progress");
   const files = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg|json)$/.test(file));
   const good = await Promise.all(files.map((file) => readFile(path.join(output, file))));
   // Generation is a separate caller: route/maintenance tests cannot catch it bypassing the shared guard.

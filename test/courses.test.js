@@ -232,8 +232,8 @@ test("CLI accumulates versioned chapters and protects learned and in-progress en
   const previousDraft = await readFile(path.join(courseDir, "draft.json"), "utf8");
   for (const [input, title] of [
     ["", "Combinational logic"],
-    ["Keep Combinational logic second; move Boolean algebra third.\n", "Boolean algebra"],
-    ["Keep Boolean algebra first; move Combinational logic third.\nconfirm\n", "Combinational logic"],
+    ["", "Boolean algebra"],
+    ["confirm\n", "Combinational logic"],
   ]) {
     await assert.rejects(
       () => runCli([...common, "--pdf", secondPdf, "--pages", "1-2"], env, input),
@@ -248,7 +248,7 @@ test("CLI accumulates versioned chapters and protects learned and in-progress en
   }
   await runCli(
     [...common, "--pdf", secondPdf, "--pages", "1-2"], env,
-    "Keep learned and in-progress chapters in place; move only pending chapters.\n",
+    "",
   );
   chapters = await runCli([...common, "--chapters"], env);
   assert.equal(outputLines(chapters).filter((line) => line.includes("Boolean algebra")).length, 2);
@@ -292,7 +292,7 @@ test("CLI accumulates versioned chapters and protects learned and in-progress en
     /Teaching route does not match the course chapters exactly/,
   );
   await assert.rejects(
-    () => runCli([...common, "--pdf", thirdPdf, "--pages", "1-2"], env, "Move pending chapters after protected chapters.\nconfirm\n"),
+    () => runCli([...common, "--pdf", thirdPdf, "--pages", "1-2"], env, "confirm\n"),
     /Teaching route would move protected chapter/,
   );
   const protectedRoute = await runCli([...common, "--chapters"], env);

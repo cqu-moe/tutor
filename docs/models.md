@@ -57,6 +57,6 @@ Model and OCR configuration are independent: `models.json` and `auth.json` contr
 
 ## Runtime contract
 
-Internal Tutor callers create sessions through `createTutorSession(courseDir, agentDir, model, options)` in `src/runtime.ts`. It resolves the default or explicit model, validates image capability, configures Pi resources, and returns an `AgentSession`. This keeps route proposal and later lecture-generation phases on the same model and authentication path.
+Lecture generation and revision create sessions through `createTutorSession(courseDir, agentDir, model, options)` in `src/runtime.ts`. It resolves the default or explicit model, validates image capability, configures Pi resources, and returns an `AgentSession`. Route proposal and memory maintenance use `openTutorDurableSession` with the same model/auth configuration and official durable conversations. Its `submit` accepts a stable host request ID plus optional learner feedback, atomically bound to the admitted input.
 
 Run prompts through `promptWithMemory(session, prompt, options)` from `src/memory.ts` to get the final answer only after normal completion and successful memory tools. The helper also supplies safe model failure diagnostics and any Recovery IDs from successful deletions preceding a failed operation. Lecture and later tutoring callers must use it instead of exposing raw SDK errors or partial responses.

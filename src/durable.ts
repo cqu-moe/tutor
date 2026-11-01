@@ -39,7 +39,9 @@ import { openAICompletionsApi } from "pi-ai-1-4/api/openai-completions.lazy";
 import { openAIResponsesApi } from "pi-ai-1-4/api/openai-responses.lazy";
 import { piMessagesApi } from "pi-ai-1-4/api/pi-messages.lazy";
 import { defaultModel, imageContent } from "./runtime.ts";
-import { memoryTools as memoryToolNames, modelFailure, prepareMemory } from "./memory.ts";
+import { courseReadPath } from "./course-files.ts";
+import type { MemoryArgs } from "./memory-store.ts";
+import { memoryTools as memoryToolNames, modelFailure, prepareMemory, memoryParameters } from "./memory.ts";
 
 export type DurablePromptPart = Awaited<ReturnType<typeof imageContent>> | { type: "text"; text: string };
 
@@ -67,8 +69,12 @@ const durableApis: Record<string, () => ProviderStreams> = {
 
 const durablePiAiTelemetrySchemaVersion = 1;
 
-// Select the latest initial/adjustment request for a particular saved draft.
-// This is not a request->submission index; Pi owns that lookup and admission.
+const MemoryConversationDoc = defineDoc({
+  kind: "tutor.memory-conversation", version: 1, scope: "session",
+  initial: () => ({ id: "" }), checkpointWhen: () => false,
+});
+
+// Select the latest request for a saved draft; Pi owns submission lookup/admission.
 const RouteRequestDoc = defineDoc({
   kind: "tutor.route-request", version: 1, scope: "conversation",
   history: "latest", fork: "initial",
@@ -234,6 +240,8 @@ function confinedExecutionEnv(options: { courseDir: string; cwd: string }): Prom
               ),
             };
           }
+          try { await courseReadPath(options.courseDir, canonical.value); }
+          catch { return { ok: false as const, error: new FileError("permission_denied", "Raw memory and legacy session history are not course content") }; }
           if (property === "openBinaryReader") {
             const readOptions = args[0] as { noFollow?: boolean } | undefined;
             return current.openBinaryReader(canonical.value, { ...readOptions, noFollow: true }, args.at(-1) as never);
@@ -245,17 +253,6 @@ function confinedExecutionEnv(options: { courseDir: string; cwd: string }): Prom
   });
 }
 
-type LegacyTool = {
-  name: string;
-  description: string;
-  parameters: unknown;
-  execute: (callId: string, args: never, signal: AbortSignal | undefined, onUpdate: unknown, context: unknown) => Promise<{
-    content?: unknown;
-    details?: unknown;
-    isError?: boolean;
-  }>;
-};
-
 export async function openTutorDurableSession(options: {
   courseDir: string;
   agentDir?: string;
@@ -263,6 +260,7 @@ export async function openTutorDurableSession(options: {
   systemPrompt?: string;
   tools?: ToolRegistration[];
   extensions?: Extension[];
+  channel?: "route" | "memory";
 }) {
   // Keep this observable read. Bun 1.4.4 honors Pi AI 1.4's incomplete
   // sideEffects metadata and can elide telemetry module initialization; without
@@ -273,7 +271,7 @@ export async function openTutorDurableSession(options: {
   if (AI_TELEMETRY_SCHEMA.version !== durablePiAiTelemetrySchemaVersion) {
     throw new Error(`Pi response failed: unsupported Pi AI telemetry schema (${AI_TELEMETRY_SCHEMA.version}); use @earendil-works/pi-ai@1.4.0.`);
   }
-  const memory = await prepareMemory(options.courseDir);
+  const memory = await prepareMemory(options.courseDir, {}, { migrateProgress: options.channel === "memory" });
   const effectiveAgentDir = options.agentDir ?? getAgentDir();
   const modelRuntime = await ModelRuntime.create({
     authPath: path.join(effectiveAgentDir, "auth.json"),
@@ -312,40 +310,35 @@ export async function openTutorDurableSession(options: {
     api: safeProviderStreams(durableApi()),
   }));
 
-  let durableConversationId = "unresolved";
-  const legacyContext = {
-    hasUI: false,
-    sessionManager: { getSessionId: () => durableConversationId },
-  };
-  const legacyTools: LegacyTool[] = [];
-  const legacyEvents: Record<string, Array<(event: unknown, context: unknown) => Promise<void> | void>> = {};
-  await memory.extensionFactory({
-    registerTool: (tool: LegacyTool) => legacyTools.push(tool),
-    on: (event: string, handler: (event: unknown, context: unknown) => Promise<void> | void) => {
-      legacyEvents[event] ??= [];
-      legacyEvents[event].push(handler);
+  const scopedMemoryTools = memoryToolNames.map((name) => ({
+    name, description: memory.descriptions[name], parameters: memoryParameters,
+    replay: "safe" as const,
+    executionMode: "sequential" as const,
+    callers: ["model"] as const,
+    execute: async (args: MemoryArgs, api: import("@earendil-works/pi-durable").ToolExecutionApi, context: import("@earendil-works/chord").Context) => {
+      const learnerFeedback = await api.commit(async (tx) => {
+        let task = await tx.task(api.taskId);
+        while (task && (task.input as { kind?: string }).kind === "nested") task = await tx.task((task.input as { parent: never }).parent);
+        const assistant = (task?.input as { assistant?: never })?.assistant;
+        if (!assistant) return "";
+        let cursor;
+        do {
+          const page = await tx.scanEntries({ conversationId: api.conversationId, maxEntryId: assistant, order: "descending" }, 100, cursor);
+          for (const entry of page.items) {
+            if (entry.kind === "tutor.request") return (entry.data as { learnerFeedback?: string })?.learnerFeedback ?? "";
+            if (entry.kind === "pi.reset") return "";
+          }
+          cursor = page.next;
+        } while (cursor);
+        return "";
+      }, context);
+      const result = await memory.invoke(name, args, `${memory.courseId}:${api.taskId}`, { learnerFeedback });
+      return { output: result.content, details: result.details, isError: "isError" in result ? result.isError : false };
     },
-  } as never);
-  await legacyEvents.session_start?.[0]?.({}, legacyContext);
-  const bridgedMemoryTools = legacyTools
-    .filter((tool) => memoryToolNames.includes(tool.name))
-    .map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters as never,
-      replay: tool.name === "memory_read" ? "safe" as const : "unsafe" as const,
-      execute: async (args: never, api: { callId: string }, context: { signal?: AbortSignal }) => {
-        const result = await tool.execute(api.callId, args, context.signal, undefined, legacyContext);
-        return {
-          output: result.content as never,
-          details: JSON.parse(JSON.stringify(result.details ?? {})) as never,
-          isError: result.isError,
-        };
-      },
-    }));
+  }));
 
   const safeRead = { ...createReadTool(), replay: "safe" as const };
-  const tools = [safeRead, ...bridgedMemoryTools, ...(options.tools ?? [])];
+  const tools = [safeRead, ...scopedMemoryTools, ...(options.tools ?? [])];
   const registry = createRegistry();
   registry.install(defineExtension({
     name: "tutor-durable",
@@ -354,8 +347,7 @@ export async function openTutorDurableSession(options: {
         options.systemPrompt ?? "You are a careful course tutor.",
         memory.systemPrompt,
       ].filter(Boolean).join("\n\n");
-      const result = await legacyEvents.before_agent_start?.[0]?.({ systemPrompt: base }, legacyContext) as { systemPrompt?: string } | undefined;
-      return result?.systemPrompt ?? base;
+      return `${base}\n\n${await memory.snapshot()}`;
     }, { tag: false })],
     tools,
   }));
@@ -370,20 +362,29 @@ export async function openTutorDurableSession(options: {
     registry,
     env: () => executionEnv,
   }, BACKGROUND_CONTEXT);
-  const conversation = await harness.root(BACKGROUND_CONTEXT, {
+  let conversation = await harness.root(BACKGROUND_CONTEXT, {
     agent: {
       model: { provider: requested.model.provider, modelId: requested.model.id },
       cwd: options.courseDir,
       tools,
     },
   });
+  if (options.channel === "memory") {
+    const id = await harness.commit(async (tx) => {
+      const pointer = await tx.doc(MemoryConversationDoc);
+      if (!pointer.id) pointer.id = String((await tx.createConversation({ ownership: { kind: "ownerless" } })).id);
+      return pointer.id;
+    }, BACKGROUND_CONTEXT);
+    const selected = await harness.conversation(id as never, BACKGROUND_CONTEXT);
+    if (!selected) throw new Error("Memory conversation is missing");
+    conversation = selected;
+  }
   await conversation.configure({
     model: { provider: requested.model.provider, modelId: requested.model.id },
     cwd: options.courseDir,
     tools,
   }, BACKGROUND_CONTEXT);
   harness.resume();
-  durableConversationId = String(conversation.id);
 
   return {
     conversationId: String(conversation.id),
@@ -393,7 +394,7 @@ export async function openTutorDurableSession(options: {
     async commit<T>(change: (tx: Tx) => T | Promise<T>): Promise<T> {
       return conversation.commit(change, BACKGROUND_CONTEXT);
     },
-    async submit(input: { content: DurablePromptPart[]; requestId: string; resumeKey?: string }): Promise<DurableSubmissionReceipt> {
+    async submit(input: { content: DurablePromptPart[]; requestId: string; resumeKey?: string; learnerFeedback?: string }): Promise<DurableSubmissionReceipt> {
       if (input.resumeKey) {
         // Write selection before admission: a crash after submit cannot leave an
         // admitted adjustment hidden behind the previous route's pointer. If
@@ -406,6 +407,7 @@ export async function openTutorDurableSession(options: {
       }
       const submission = await conversation.submit({
         type: "input",
+        entry: { kind: "tutor.request", data: { learnerFeedback: input.learnerFeedback ?? "" } },
         content: input.content as never,
         requestId: input.requestId,
       }, BACKGROUND_CONTEXT);
@@ -425,6 +427,7 @@ export async function openTutorDurableSession(options: {
       if (!submission) throw new Error(`Durable submission ${submissionId} is not in this course`);
       const settled = await submission.wait(BACKGROUND_CONTEXT);
       let memoryFailure: string | undefined;
+      let memoryFailureDetail = "";
       const recoveryIds: string[] = [];
       let cursor: unknown;
       do {
@@ -438,7 +441,10 @@ export async function openTutorDurableSession(options: {
           if (!ToolResultEntry.is(record)) continue;
           const result = record.model[0];
           if (result?.role !== "toolResult" || !memoryToolNames.includes(result.toolName)) continue;
-          if (result.isError) memoryFailure ??= result.toolName;
+          if (result.isError) {
+            memoryFailure ??= result.toolName;
+            memoryFailureDetail = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+          }
           for (const part of result.content) {
             if (part.type !== "text") continue;
             const recoveryId = part.text.match(/Recovery ID: ([0-9a-f-]+)/i)?.[1];
@@ -457,7 +463,7 @@ export async function openTutorDurableSession(options: {
         throw new Error(`Durable submission did not finish: ${JSON.stringify(settled)}`);
       }
       if (memoryFailure) {
-        throw new Error(`learner memory operation failed (${memoryFailure}); saving/maintenance did not complete${recoveryHelp}`);
+        throw new Error(`learner memory operation failed (${memoryFailure}); saving/maintenance did not complete: ${memoryFailureDetail}${recoveryHelp}`);
       }
       const entry = await conversation.commit(async (tx) => {
         const record = await tx.entry(AssistantEntry, settled.answer);

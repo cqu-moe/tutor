@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { access, lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { memoryDirectory } from "./memory-store.ts";
 import { sandboxOptions } from "./assets.ts";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import { createBashToolDefinition, createLocalBashOperations, createEditToolDefinition, createWriteToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -23,7 +24,8 @@ export async function stageTools(courseDir: string, stage: string): Promise<Tool
         ...await sandboxOptions(),
         network: { allowedDomains: [], deniedDomains: [] },
         filesystem: {
-          denyRead: [], allowWrite: [{ path: root, literal: true }],
+          denyRead: [path.dirname(courseDir), memoryDirectory(courseDir), path.join(courseDir, ".sessions"), path.join(courseDir, ".durable"), path.join(courseDir, "revision-session.json")].map((directory) => ({ path: directory, literal: true })),
+          allowRead: [{ path: root, literal: true }], allowWrite: [{ path: root, literal: true }],
           denyWrite: ["/tmp/claude", "/private/tmp/claude", path.join(homedir(), ".npm/_logs"), path.join(homedir(), ".claude/debug")]
             .map((directory) => ({ path: directory, literal: true })),
         },

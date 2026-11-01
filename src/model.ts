@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { imageContent } from "./runtime.ts";
 import { openTutorDurableSession, type DurablePromptPart, type TutorDurableSession } from "./durable.ts";
 import { selectionScope } from "./selection.ts";
@@ -92,7 +92,7 @@ export async function proposeRoute(
       process.stdout.write("\n");
       const current = output;
       output = "";
-      output = await askDurable(session, `Adjust this teaching route. Record any explicit learner feedback before responding. Return the complete revised route.\n\nCurrent route:\n${current}\n\nUser adjustment: ${line}`, [], resumeKey);
+      output = await askDurable(session, `Adjust this teaching route. Record any explicit learner feedback before responding. Return the complete revised route.\n\nCurrent route:\n${current}\n\nUser adjustment: ${line}`, [], resumeKey, line);
       process.stdout.write(output);
       if (!output.trim()) {
         throw new Error("Pi route adjustment failed: the model returned no revised route");
@@ -108,10 +108,10 @@ export async function proposeRoute(
   }
 }
 
-async function askDurable(session: TutorDurableSession, prompt: string, images: DurablePromptPart[] = [], resumeKey?: string) {
+async function askDurable(session: TutorDurableSession, prompt: string, images: DurablePromptPart[] = [], resumeKey?: string, learnerFeedback?: string) {
   const content = [{ type: "text" as const, text: prompt }, ...images];
-  const requestId = createHash("sha256").update(JSON.stringify(content)).digest("hex");
-  const receipt = await session.submit({ content, requestId, resumeKey });
+  const requestId = randomUUID();
+  const receipt = await session.submit({ content, requestId, resumeKey, learnerFeedback });
   const answer = await session.wait(receipt.submissionId);
   return answer.text;
 }

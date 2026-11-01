@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { memoryTools, prepareMemory } from "./memory.ts";
+import { courseReadTools } from "./course-files.ts";
 import { stageTools } from "./stage-tools.ts";
 
 export const defaultModel = "magpie/codex/gpt-6.1-sol";
@@ -25,7 +26,7 @@ export async function createTutorSession(
   courseDir: string,
   agentDir: string | undefined,
   model: string | undefined,
-  options?: { systemPrompt?: string; tools?: string[]; sessionManager?: SessionManager; writeRoot?: string },
+  options?: { systemPrompt?: string; tools?: string[]; writeRoot?: string; learnerFeedback?: string },
 ): Promise<AgentSession> {
   const tools = options?.tools ?? ["read"];
   if (tools.some((tool) => ["write", "edit", "bash"].includes(tool)) && !options?.writeRoot) {
@@ -42,7 +43,7 @@ export async function createTutorSession(
     throw new Error(`Pi model ${requested.model?.provider}/${requested.model?.id} cannot read course images`);
   }
 
-  const memory = await prepareMemory(courseDir);
+  const memory = await prepareMemory(courseDir, { learnerFeedback: options?.learnerFeedback });
   const resourceLoader = new DefaultResourceLoader({
     cwd: courseDir,
     agentDir: effectiveAgentDir,
@@ -63,9 +64,9 @@ export async function createTutorSession(
     modelRuntime,
     model: requested.model,
     tools: [...tools, ...memoryTools],
-    customTools: options?.writeRoot ? await stageTools(courseDir, options.writeRoot) : [],
+    customTools: [...await courseReadTools(courseDir, tools, options?.writeRoot), ...(options?.writeRoot ? await stageTools(courseDir, options.writeRoot) : [])],
     resourceLoader,
-    sessionManager: options?.sessionManager ?? SessionManager.inMemory(),
+    sessionManager: SessionManager.inMemory(),
   });
   return session;
 }

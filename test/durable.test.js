@@ -114,6 +114,10 @@ test("route CLI resumes the original durable submission and completed read after
       return;
     }
     if (modelRequests.length === 5) return;
+    if (modelRequests.length === 7) {
+      toolCalls(response, [{ id: "read-memory", type: "function", function: { name: "memory_read", arguments: JSON.stringify({ target: "long_term" }) } }]); return;
+    }
+    if (modelRequests.length === 8) { sse(response, { content: String(payload.messages.at(-1).content) }); return; }
     const transcript = JSON.stringify(payload.messages);
     sse(response, { content: transcript.includes("durable-secret-value")
       ? `Leaked credential: durable-secret-value`
@@ -204,7 +208,8 @@ test("route CLI resumes the original durable submission and completed read after
   assert.equal(await new Promise((resolve) => resumedAdjustment.child.once("exit", resolve)), 0, resumedAdjustment.output().stderr);
   assert.match(resumedAdjustment.output().stdout, /Material doubts: none; use truth tables/);
   assert.equal(modelRequests.length, 6, "resume must wait on the original adjustment, not return the earlier route");
-  const memory = await readFile(path.join(root, "memory", "MEMORY.md"), "utf8");
-  assert.equal(memory.split(preference).length - 1, 1, "a committed unsafe memory write must not replay");
+  const memoryRead = startCli([...resumeArgs.filter((arg) => arg !== "--resume"), "--memory", "Show current learner memory"], env);
+  assert.equal(await new Promise((resolve) => memoryRead.child.once("exit", resolve)), 0, memoryRead.output().stderr);
+  assert.equal(memoryRead.output().stdout.split(preference).length - 1, 1, "completed memory effect must occur once");
   assert.ok(await readFile(path.join(courseDir, ".durable/session.sqlite")), "official SQLite storage remains in the course");
 });
