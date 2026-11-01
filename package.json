@@ -1,9 +1,12 @@
 {
   "name": "@cqu-moe/tutor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.4",
+  "workspaces": [
+    "gui"
+  ],
   "engines": {
     "bun": ">=1.4.4"
   },
@@ -11,12 +14,23 @@
     "tutor": "bun --no-env-file src/cli.ts",
     "build": "bun --no-env-file scripts/build.ts",
     "test": "bun --no-env-file test --timeout 180000",
-    "gui": "bun --no-env-file src/cli.ts gui"
+    "gui": "bun --no-env-file src/cli.ts gui",
+    "typecheck": "bun --no-env-file run --filter @cqu-moe/tutor-gui typecheck",
+    "check:design": "bun --no-env-file run --filter @cqu-moe/tutor-gui check:design"
   },
+  "overrides": {
+    "@cqu-moe/theme": "file:gui/.design/cqu-moe-theme-1.1.0.tgz"
+  },
+  "trustedDependencies": [
+    "esbuild",
+    "@parcel/watcher"
+  ],
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",
+    "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "0.82.1",
     "@earendil-works/pi-coding-agent": "0.82.1",
-    "pi-memory": "0.4.2"
+    "@earendil-works/pi-durable": "1.4.0",
+    "pi-ai-1-4": "npm:@earendil-works/pi-ai@1.4.0"
   }
 }

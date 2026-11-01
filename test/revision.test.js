@@ -177,8 +177,14 @@ test("CLI revises delivered lectures across processes while preserving usable ou
     oldText: "与门在两个输入均为 1 时输出 1。",
     newText: "只有两个输入都为 1，AND 门的输出才为 1。",
   });
+  await mkdir(path.join(courseDir, ".sessions"), { recursive: true });
+  const legacySession = JSON.stringify({ type: "session", version: 3, id: "legacy", timestamp: "2026-01-01T00:00:00Z", cwd: courseDir }) + "\n" + JSON.stringify({ type: "message", id: "legacy-result", parentId: null, timestamp: "2026-01-01T00:00:00Z", message: { role: "toolResult", toolCallId: "old-memory", toolName: "memory_read", content: [{ type: "text", text: "Other-course legacy session canary" }], isError: false, timestamp: 1 } }) + "\n";
+  await writeFile(path.join(courseDir, ".sessions", "legacy.jsonl"), legacySession);
+  await writeFile(path.join(courseDir, "revision-session.json"), JSON.stringify({ sessionFile: "legacy.jsonl" }));
   const adjacent = await runCli([...common, "--revise", adjacentFeedback], env);
   assert.equal(adjacent.code, 0, adjacent.stderr);
+  assert.ok(!JSON.stringify(requests).includes("Other-course legacy session canary"), "legacy memory history is not reinjected");
+  assert.equal(await readFile(path.join(courseDir, ".sessions", "legacy.jsonl"), "utf8"), legacySession);
   const afterAdjacentEdit = await readFile(path.join(output, "content.md"), "utf8");
   assert.match(afterAdjacentEdit, /只有两个输入都为 1，AND 门的输出才为 1。/);
 

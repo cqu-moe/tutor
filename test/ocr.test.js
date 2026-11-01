@@ -56,6 +56,11 @@ function sse(response, text) {
   response.end(`data: ${JSON.stringify(delta)}\n\ndata: ${JSON.stringify(end)}\n\ndata: [DONE]\n\n`);
 }
 
+function userText(message) {
+  if (typeof message.content === "string") return message.content;
+  return message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+}
+
 test("CLI selects OCR, reuses exact sources, and preserves partial results after failures", { timeout: 90_000 }, async () => {
   const root = await mkdir(path.join(tmpdir(), `tutor-issue5-${Date.now()}`), { recursive: true });
   const pdf = path.join(root, "lecture.pdf");
@@ -176,8 +181,12 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
   const mistralAddress = await listen(mistral);
 
   const model = createServer(async (request, response) => {
-    await body(request);
-    sse(response, "## Teaching route\n1. Boolean Functions");
+    const parsed = await body(request);
+    const payload = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+    const lastUser = payload.messages?.findLast((message) => message.role === "user");
+    const prompt = lastUser ? userText(lastUser) : "";
+    const titles = [...prompt.matchAll(/^\d+\.\s+(.+)$/gm)].map((match) => match[1]);
+    sse(response, `## Teaching route\n${titles.map((title, index) => `${index + 1}. ${title}`).join("\n")}`);
   });
   const modelAddress = await listen(model);
   const agentDir = path.join(root, "pi");
@@ -196,9 +205,17 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
 
   const dataDir = path.join(root, "data");
   const common = ["--course", "Digital Design", "--pdf", pdf, "--pages", "1", "--data-dir", dataDir, "--agent-dir", agentDir, "--model", "tutorTest/route-model"];
+  const courseCommon = ["--course", "Digital Design", "--data-dir", dataDir, "--agent-dir", agentDir, "--model", "tutorTest/route-model"];
   const env = { ...process.env, MINERU_API_TOKEN: "test-only-mineru", MISTRAL_API_KEY: "test-only-mistral", NO_COLOR: "1" };
   try {
-    await runCli([...common, "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`], "confirm\n", env);
+    await runCli([...common, "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`], "", env);
+    const chapters = await runCli([...courseCommon, "--chapters"], "", env);
+    const chapterId = chapters.match(/chapter ([0-9a-f-]{36})/)?.[1];
+    assert.ok(chapterId, chapters);
+    await runCli([
+      ...courseCommon, "--confirm-chapter", "--chapter-id", chapterId, "--title", "Boolean Functions",
+    ], "", env);
+    await runCli([...courseCommon, "--resume"], "confirm\n", env);
     let context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     const savedMineruFiles = await readdir(path.join(dataDir, "digital-design", "parsed", "mineru"), { recursive: true });
     assert.ok(!savedMineruFiles.some((file) => file.endsWith(".zip")));
@@ -213,12 +230,12 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     await runCli([...common, "--ocr", "mistral", "--mistral-base-url", `http://${mistralAddress.address}:${mistralAddress.port}`], "confirm\n", env);
     context = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     assert.equal(context.pages[0].sourcePage, 1);
-    assert.match(context.pages[0].markdown, /Boolean Functions/);
-    await readFile(path.join(context.pages[0].parsedDirectory, "img-0.png"));
+    assert.match(context.pages[0].markdown, /F = xy \+ x'z/);
+    await readFile(path.join(context.pages[0].parsedDirectory, "figure.png"));
     mistralRejects = true;
 
     await runCli([...common, "--ocr", "mistral", "--mistral-base-url", `http://${mistralAddress.address}:${mistralAddress.port}`], "confirm\n", env);
-    assert.equal(mistralCalls, 1);
+    assert.equal(mistralCalls, 0);
 
     const mistralContext = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     const oldDelivery = path.join(dataDir, "digital-design", "lecture.md");
@@ -243,12 +260,16 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
       JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context,
       mistralContext,
     );
-    assert.match(mistralContext.pages[0].markdown, /Boolean Functions/);
+    assert.match(mistralContext.pages[0].markdown, /F = xy \+ x'z/);
     assert.equal(await readFile(oldDelivery, "utf8"), "Previous good lecture\n");
 
     // The endpoint is part of the selected service identity, even on the same host.
     await assert.rejects(
-      () => runCli([...common, "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}/other-service`], "", env),
+      () => runCli([
+        "--course", "Digital Design", "--pdf", changedPdf, "--pages", "1",
+        "--data-dir", dataDir, "--agent-dir", agentDir, "--model", "tutorTest/route-model",
+        "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}/other-service`,
+      ], "", env),
       /MinerU task creation.*HTTP 404/,
     );
 
@@ -262,7 +283,7 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     });
     assert.deepEqual(JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context, mistralContext);
     mistralMode = "documents-fail";
-    await runCli(expanded, "confirm\n", env);
+    await runCli(expanded, "", env);
     const recovered = JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).context;
     assert.deepEqual(recovered.pages.map((page) => page.sourcePage), [2]);
     assert.equal(recovered.screenshots.length, 1);
@@ -294,7 +315,7 @@ test("CLI selects OCR, reuses exact sources, and preserves partial results after
     mineruMode = "partial";
     await assert.rejects(() => runCli([...mineruArgs, "--course", "Partial MinerU", "--pages", "1-2"], "", env), /page processing failed/);
     mineruRejects = true;
-    await runCli([...mineruArgs, "--course", "Partial MinerU", "--pages", "2"], "confirm\n", env);
+    await runCli([...mineruArgs, "--course", "Partial MinerU", "--pages", "2"], "", env);
   } finally {
     await new Promise((resolve) => mineru.close(resolve));
     await new Promise((resolve) => mistral.close(resolve));

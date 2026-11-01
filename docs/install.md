@@ -168,30 +168,41 @@ Also keep `PATH="$HOME/.local/bin:$PATH"` and `TUTOR_HOME` in the profile so Tut
 
 ## Tutor executable and doctor
 
-Download `tutor-executables` from a successful [Bun distribution workflow run](https://github.com/cqu-moe/tutor/actions/workflows/distribution.yml) and unpack it into `dist/`, or use a local build's `dist/` output. Actions artifacts expire after 7 days. CI builds all four targets and verifies the Linux x64 executable on a native runner before uploading. These are build artifacts, not a signed or notarized release. The build artifact names are:
-
-```text
-dist/tutor-darwin-arm64
-dist/tutor-darwin-x64
-dist/tutor-linux-arm64
-dist/tutor-linux-x64
-```
-
-The artifact includes `SHA256SUMS`; verify it inside `dist/` with `sha256sum --check SHA256SUMS` on Linux or `shasum -a 256 --check SHA256SUMS` on macOS. GitHub's ZIP download does not preserve executable permissions; the `install -m 755` command below restores them.
-
-Install the file matching your platform as `tutor`:
+For version 0.2.0, use the [v0.2.0 Release page](https://github.com/cqu-moe/tutor/releases/tag/v0.2.0) once its assets are published. Until publication, use a successful Actions artifact as described below. Download the binary for your host, `SHA256SUMS`, and `BUILD-PROVENANCE.txt` into one directory:
 
 ```sh
+set -eu
+mkdir -p "$TUTOR_HOME/downloads/0.2.0"
+cd "$TUTOR_HOME/downloads/0.2.0"
 case "$(uname -s)/$(uname -m)" in
-  Darwin/arm64) tutor_artifact=dist/tutor-darwin-arm64 ;;
-  Darwin/x86_64) tutor_artifact=dist/tutor-darwin-x64 ;;
-  Linux/aarch64) tutor_artifact=dist/tutor-linux-arm64 ;;
-  Linux/x86_64) tutor_artifact=dist/tutor-linux-x64 ;;
+  Darwin/arm64) tutor_asset=tutor-darwin-arm64 ;;
+  Darwin/x86_64) tutor_asset=tutor-darwin-x64 ;;
+  Linux/aarch64|Linux/arm64) tutor_asset=tutor-linux-arm64 ;;
+  Linux/x86_64) tutor_asset=tutor-linux-x64 ;;
   *) echo "Unsupported platform: $(uname -s)/$(uname -m)" >&2; exit 1 ;;
 esac
-install -m 755 "$tutor_artifact" "$HOME/.local/bin/tutor"
+tutor_release=https://github.com/cqu-moe/tutor/releases/download/v0.2.0
+curl -fLO "$tutor_release/$tutor_asset"
+curl -fLO "$tutor_release/SHA256SUMS"
+curl -fLO "$tutor_release/BUILD-PROVENANCE.txt"
+# Verify only the selected asset; the checksum file lists all four platforms.
+awk -v asset="$tutor_asset" '$2 == asset { print }' SHA256SUMS > selected.sha256
+test "$(wc -l < selected.sha256 | tr -d ' ')" = 1
+if command -v shasum >/dev/null; then
+  shasum -a 256 --check selected.sha256
+else
+  sha256sum --check selected.sha256
+fi
+cat BUILD-PROVENANCE.txt
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$tutor_asset" "$HOME/.local/bin/tutor"
 tutor --version
+# Expected: tutor 0.2.0
 ```
+
+`BUILD-PROVENANCE.txt` records `app-version`, source commit, root lockfile SHA-256 and Bun revision. Release assets must come from the successful distribution run for that exact main commit; a PR merge-ref build is not final release provenance. Checksums detect corrupted or mismatched downloads; the binaries are unsigned and not notarized.
+
+Before publication, download `tutor-executables` from a successful [Bun distribution run](https://github.com/cqu-moe/tutor/actions/workflows/distribution.yml), or use local `dist/` output. Actions artifacts expire after 7 days. The archive contains the same four binary names and provenance/checksum files; unpack it, verify checksums there, and install the selected file with `install -m 755`. ZIP extraction may remove executable permissions. Native Linux x64 execution is a required CI gate before artifact upload; other targets' cross-compilation is separate evidence.
 
 If credentials and other environment variables are kept in a file, load it explicitly with `--env-file`. Existing environment variables take precedence over values in the file:
 

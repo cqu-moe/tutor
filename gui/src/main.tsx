@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type MouseEvent,
 } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -209,12 +210,15 @@ function Courses({ state, refresh }: { state: GuiState; refresh: () => void }) {
       {state.job && (
         <JobStatus
           job={state.job}
+          refresh={refresh}
           courseId={
             state.courses.find((course) => course.name === state.job?.course)
               ?.id
           }
         />
       )}
+      {state.pending.length > 0 && <Alert><AlertTitle>旧工作保留待处理</AlertTitle><AlertDescription><ul>{state.pending.map(item => <li key={item.path}>{item.path}：没有接纳记录，请先检查本地文件，再明确创建新任务。</li>)}</ul></AlertDescription></Alert>}
+      {state.tasks.length > 1 && <details><summary>其他保存的任务</summary>{state.tasks.filter(task => task.id !== state.job?.id).map(task => <JobStatus key={task.id} job={task} courseId={task.courseSlug} refresh={refresh} />)}</details>}
       {!state.courses.length ? (
         <div className="welcome panel">
           <div className="welcome-intro">
@@ -288,6 +292,8 @@ function Courses({ state, refresh }: { state: GuiState; refresh: () => void }) {
                     </Link>
                     <p>
                       {pageRange(course.pages)}
+                      {` · ${course.materials} 份资料`}
+                      {` · ${course.chapters.length} 个章节`}
                       {course.screenshots
                         ? ` · ${course.screenshots} 张截图`
                         : ''}
@@ -339,6 +345,7 @@ function ImportCourse({
   const [file, setFile] = useState<File>();
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [createState, setCreateState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const lock = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -384,6 +391,33 @@ function ImportCourse({
       setSubmitting(false);
     }
   }
+  async function createEmpty(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    if (lock.current || active(state.job)) return;
+    const form = event.currentTarget.form;
+    if (!form) return;
+    const name = String(new FormData(form).get('course')).trim().normalize('NFC');
+    if (!name) {
+      setError('先填写课程名称，再建立空课程。');
+      form.querySelector<HTMLInputElement>('#course-name')?.focus();
+      return;
+    }
+    lock.current = true;
+    setCreateState('loading');
+    setError('');
+    try {
+      const created = await post('/api/courses', { name });
+      const createdBody = await created.json();
+      setCreateState('success');
+      refresh();
+      navigate(`/courses/${encodeURIComponent(createdBody.id)}`);
+    } catch (error) {
+      setError((error as Error).message);
+      setCreateState('error');
+    } finally {
+      lock.current = false;
+    }
+  }
   return (
     <>
       <PageHeader
@@ -402,6 +436,7 @@ function ImportCourse({
                 maxLength={160}
                 placeholder="例如：数字逻辑设计"
                 autoComplete="off"
+                onChange={() => { setCreateState('idle'); setError(''); }}
               />
               <p className="hint">
                 同名课程会延续已有记录；新资料不会立即覆盖已导出的讲解稿。
@@ -511,6 +546,14 @@ function ImportCourse({
             <Button asChild variant="ghost">
               <Link to="/">返回课程</Link>
             </Button>
+            <ActionButton
+              type="button"
+              variant="outline"
+              disabled={active(state.job) || submitting}
+              state={createState}
+              labels={{ idle: '先建立空课程', loading: '正在建立…', success: '已建立课程', error: '重试建立课程' }}
+              onClick={(event) => void createEmpty(event)}
+            />
           </div>
         </form>
         <aside className="context-note">

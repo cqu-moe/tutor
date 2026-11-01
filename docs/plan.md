@@ -1,6 +1,8 @@
 # Tutor 第一版方案
 
-状态：已整理为 [第一版规格](spec.md) 并发布为 [GitHub Issue #1](https://github.com/cqu-moe/tutor/issues/1)，标签为 `ready-for-agent`；用户已确认测试边界。详细依据见 [discovery.md](discovery.md)，领域术语见 [GLOSSARY.md](../GLOSSARY.md)。
+本文保留第一版规划时的方案、待准备项与验收判断，作为历史记录。当前课程学习、分层记忆和中断恢复需求见 [规格 #13](https://github.com/cqu-moe/tutor/issues/13)，当前使用与开发入口见 [README](../README.md)。
+
+历史状态（第一版规格发布时）：已整理为 [第一版规格](spec.md) 并发布为 [GitHub Issue #1](https://github.com/cqu-moe/tutor/issues/1)，标签为 `ready-for-agent`；用户已确认测试边界。详细依据见 [discovery.md](discovery.md)，领域术语见 [GLOSSARY.md](../GLOSSARY.md)。
 
 ## 要做出的体验
 

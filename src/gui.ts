@@ -2,7 +2,10 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, lstat } from "node:fs/promises";
 import path from "node:path";
 import { readDraft } from "./lecture-state.ts";
+import { CourseStateError, createCourse, readCourse, resolveChapterTitle, updateChapterProgress, type CourseRecord } from "./course-state.ts";
 import { defaultModel } from "./runtime.ts";
+import { ownDataDirectory } from "./ownership.ts";
+import { openTeachingCenter, teachingConfig } from "./teaching.ts";
 import type { GuiAction, GuiCourse, GuiJob } from "./gui-types.ts";
 
 type Options = {
@@ -20,10 +23,11 @@ class RequestError extends Error {
 export async function startGui(options: Options) {
   if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new Error("--port must be between 0 and 65535");
   if (!["mineru", "mistral"].includes(options.ocr)) throw new Error("--ocr must be mineru or mistral");
-  const dataDir = path.resolve(options.dataDir);
+  const ownership = await ownDataDirectory(options.dataDir);
+  const dataDir = ownership.root;
   const publicDir = Bun.isStandaloneExecutable ? path.join(import.meta.dirname, "resources/gui") : path.resolve(import.meta.dirname, "../gui/dist");
   const template = await readFile(path.join(publicDir, "index.html"), "utf8").catch(() => {
-    throw new Error("GUI assets are missing. Run pnpm install && pnpm build from gui/ first.");
+    throw new Error("GUI assets are missing. Run bun install and bun run --filter @cqu-moe/tutor-gui build first.");
   });
   const token = crypto.randomUUID();
   const html = template.replace("__TUTOR_SESSION__", token);
@@ -35,6 +39,23 @@ export async function startGui(options: Options) {
   let completion: Promise<void> | undefined;
   let submission = Promise.resolve();
   let submissionFinished: (() => void) | undefined;
+  let courseWrites = Promise.resolve();
+  const center = await openTeachingCenter(dataDir, (current) => { job = current; });
+  job = (await center.list()).at(-1) ?? null;
+  center.resume();
+  const config = () => teachingConfig(options);
+  async function admit(action: "import" | "generate" | "revise" | "memory", course: string, input: { pdf?: string; pages?: string; chapter?: string; screenshots?: string[]; chapterId?: string; feedback?: string }) {
+    const current = await center.admit({ action, course, config: await config(), ...input });
+    job = current;
+    center.resume();
+    return current;
+  }
+
+  function serializeCourseWrite<T>(operation: () => Promise<T>) {
+    const result = courseWrites.then(operation);
+    courseWrites = result.then(() => undefined, () => undefined);
+    return result;
+  }
 
   async function courseDirectory(id: string) {
     if (!id || id.startsWith(".") || /[/\\\0]/.test(id)) throw new RequestError("课程不存在。", 404);
@@ -53,13 +74,18 @@ export async function startGui(options: Options) {
       let name: string;
       try { name = (await readFile(path.join(directory, ".course-name"), "utf8")).trim(); }
       catch (error) { if (missing(error)) continue; throw error; }
-      const base = { id: entry.name, name, pages: [], screenshots: 0, confirmed: false, hasRoute: false, published: false, updatedAt: (await stat(directory)).mtime.toISOString() };
+      const base = { id: entry.name, name, pages: [], screenshots: 0, confirmed: false, hasRoute: false, published: false, materials: 0, chapters: [], updatedAt: (await stat(directory)).mtime.toISOString() };
       try {
-        const draft = await readDraft(directory);
-        result.push({ ...base, pages: draft.context.pages.map((page) => page.sourcePage), screenshots: draft.context.screenshots.length,
-          confirmed: Boolean(draft.context.confirmedAt), hasRoute: Boolean(draft.route.trim()),
+        const course = await readCourse(directory);
+        result.push({ ...base,
+          courseId: course.id,
+          pages: [...new Set(course.materials.flatMap((material) => material.sourcePages))].sort((a, b) => a - b),
+          screenshots: course.materials.reduce((total, material) => total + material.screenshots.length, 0),
+          confirmed: Boolean(course.route.confirmedAt), hasRoute: Boolean(course.route.markdown.trim()),
           published: await Bun.file(path.join(directory, "output/content.md")).exists(),
-          updatedAt: (await stat(path.join(directory, "draft.json")).catch(() => stat(directory))).mtime.toISOString(),
+          materials: course.materials.length,
+          chapters: chapterSummaries(course),
+          updatedAt: (await stat(path.join(directory, "course.json")).catch(() => stat(path.join(directory, "draft.json")))).mtime.toISOString(),
         });
       } catch (error) {
         result.push({ ...base, error: missing(error) ? "资料尚未导入完成，可重新导入。" : "课程记录无法读取，请检查本地文件后重试。" });
@@ -68,35 +94,58 @@ export async function startGui(options: Options) {
     return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  async function outputFile(directory: string, file: string) {
+  async function outputRoot(directory: string, chapterId?: string) {
+    if (chapterId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chapterId)) {
+      throw new RequestError("章节不存在。", 404);
+    }
+    const root = await realpath(directory);
+    return chapterId ? path.join(root, "chapters", chapterId, "output") : path.join(root, "output");
+  }
+
+  async function outputFile(directory: string, file: string, chapterId?: string) {
     if (path.isAbsolute(file) || file.split(/[/\\]/).some((part) => !part || part.startsWith(".")) || !fileTypes.has(path.extname(file))) {
       throw new RequestError("文件不存在。", 404);
     }
-    const root = await realpath(path.join(directory, "output"));
-    if (root !== path.join(await realpath(directory), "output")) throw new RequestError("文件不存在。", 404);
+    const expectedRoot = await outputRoot(directory, chapterId);
+    const root = await realpath(expectedRoot);
+    if (root !== expectedRoot) throw new RequestError("文件不存在。", 404);
     const target = await realpath(path.join(root, file));
     if (!target.startsWith(root + path.sep) || !(await stat(target)).isFile()) throw new RequestError("文件不存在。", 404);
     return target;
   }
 
-  async function outputFiles(directory: string, prefix = ""): Promise<string[]> {
-    if (!prefix && (await lstat(path.join(directory, "output")).catch(() => null))?.isSymbolicLink()) return [];
-    const entries = await readdir(path.join(directory, "output", prefix), { withFileTypes: true }).catch((error) => { if (missing(error)) return []; throw error; });
+  async function outputFiles(directory: string, prefix = "", chapterId?: string): Promise<string[]> {
+    const root = await outputRoot(directory, chapterId);
+    if (!prefix && (await lstat(root).catch(() => null))?.isSymbolicLink()) return [];
+    const entries = await readdir(path.join(root, prefix), { withFileTypes: true }).catch((error) => { if (missing(error)) return []; throw error; });
     const files: string[] = [];
     for (const entry of entries) {
       if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
       const name = prefix + entry.name;
-      if (entry.isDirectory()) files.push(...await outputFiles(directory, name + "/"));
+      if (entry.isDirectory()) files.push(...await outputFiles(directory, name + "/", chapterId));
       else if (entry.isFile() && fileTypes.has(path.extname(entry.name))) files.push(name);
     }
     return files.sort();
+  }
+
+  function chapterSummaries(course: CourseRecord) {
+    return [...course.chapters]
+      .sort((a, b) => a.order - b.order)
+      .map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title,
+        status: chapter.status,
+        order: chapter.order,
+        needsConfirmation: chapter.needsConfirmation,
+        lecturePublished: chapter.lecture.status === "published",
+      }));
   }
 
   const string = (value: unknown, label: string, limit = 4000) => {
     if (typeof value !== "string" || !value.trim() || value.length > limit || value.includes("\0")) throw new RequestError(`${label}不能为空，且不能超过 ${limit} 个字符。`);
     return value.trim();
   };
-  function launch(action: GuiAction, course: string | null, args: string[], cleanup?: string) {
+  function launchDoctor(action: GuiAction, course: string | null, args: string[], cleanup?: string) {
     if (stopping) throw new RequestError("工作台正在关闭。", 503);
     const current: GuiJob = { id: crypto.randomUUID(), action, course, status: "running", stage: action, log: "" };
     job = current;
@@ -139,7 +188,8 @@ export async function startGui(options: Options) {
     if (request.headers.get("x-tutor-session") !== token) throw new RequestError("会话已失效，请刷新页面。", 403);
     const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
     if (request.method === "GET" && url.pathname === "/api/state") {
-      return Response.json({ courses: await courses(), job, config: { model: options.model ?? defaultModel, ocr: options.ocr, dataDir } });
+      if (job?.action !== "doctor") job = (await center.list()).at(-1) ?? job;
+      return Response.json({ courses: await courses(), job, tasks: await center.list(), pending: await center.pending(), config: { model: options.model ?? defaultModel, ocr: options.ocr, dataDir } });
     }
     if (request.method === "GET" && segments[1] === "courses" && segments[2]) {
       const directory = await courseDirectory(segments[2]);
@@ -147,41 +197,95 @@ export async function startGui(options: Options) {
         const target = await outputFile(directory, segments.slice(4).join("/"));
         return new Response(Bun.file(target), { headers: { "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(target))}` } });
       }
+      if (segments[3] === "chapters" && segments[5] === "files" && segments.length > 6) {
+        const target = await outputFile(directory, segments.slice(6).join("/"), segments[4]);
+        return new Response(Bun.file(target), { headers: { "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(target))}` } });
+      }
       if (segments.length !== 3) throw new RequestError("页面不存在。", 404);
-      const draft = await readDraft(directory);
+      const course = await readCourse(directory);
       const files = await outputFiles(directory);
       const content = files.includes("content.md") ? await readFile(await outputFile(directory, "content.md"), "utf8") : "";
-      return Response.json({ route: draft.route, content, files });
+      const chapters = await Promise.all([...course.chapters].sort((a, b) => a.order - b.order).map(async (chapter) => {
+        const material = course.materials.find((entry) => entry.id === chapter.source.materialId);
+        const chapterFiles = chapter.lecture.status === "published" ? await outputFiles(directory, "", chapter.id) : [];
+        return {
+          id: chapter.id,
+          title: chapter.title,
+          status: chapter.status,
+          order: chapter.order,
+          materialName: material?.name ?? "未知资料",
+          materialVersion: material?.version ?? chapter.source.materialVersion,
+          needsConfirmation: chapter.needsConfirmation,
+          lecture: {
+            status: chapter.lecture.status,
+            content: chapterFiles.includes("content.md")
+              ? await readFile(await outputFile(directory, "content.md", chapter.id), "utf8")
+              : "",
+            files: chapterFiles,
+          },
+        };
+      }));
+      return Response.json({ courseId: course.id, route: course.route.markdown, content, files, chapters });
     }
     if (request.method !== "POST") throw new RequestError("页面不存在。", 404);
     if (stopping) throw new RequestError("工作台正在关闭。", 503);
+    if (url.pathname === "/api/courses") {
+      if (starting || busy(job)) throw new RequestError("另一个任务正在更新课程，请稍后重试。", 409);
+      const body = await request.json();
+      const name = string(body?.name, "课程名称", 160).normalize("NFC");
+      const created = await serializeCourseWrite(async () => {
+        if (starting || busy(job)) throw new RequestError("另一个任务正在更新课程，请稍后重试。", 409);
+        return createCourse(dataDir, name);
+      });
+      return Response.json({ id: path.basename(created.directory), courseId: created.record.id }, { status: 201 });
+    }
+    if (segments[1] === "courses" && segments[2] && segments[3] === "chapters" && segments[5] === "progress" && segments.length === 6) {
+      if (url.pathname !== `/api/courses/${segments[2]}/chapters/${segments[4]}/progress`) {
+        throw new RequestError("页面不存在。", 404);
+      }
+      if (starting || busy(job)) throw new RequestError("另一个任务正在更新课程，请稍后重试。", 409);
+      const body = await request.json();
+      if (!body || typeof body !== "object" || Array.isArray(body) || ["pending", "in_progress", "learned"].includes(body.status) === false) {
+        throw new RequestError("学习状态必须为 pending、in_progress 或 learned。");
+      }
+      const directory = await courseDirectory(segments[2]);
+      await serializeCourseWrite(async () => {
+        if (starting || busy(job)) throw new RequestError("另一个任务正在更新课程，请稍后重试。", 409);
+        await updateChapterProgress(directory, segments[4], body.status);
+      });
+      return Response.json({ ok: true });
+    }
+    if (segments[1] === "courses" && segments[2] && segments[3] === "chapters" && segments[5] === "title" && segments.length === 6) {
+      if (starting || job?.status === "running") throw new RequestError("另一个任务正在更新课程，请稍后重试。", 409);
+      const body = await request.json();
+      const title = string(body?.title, "章节标题", 300).normalize("NFC");
+      const directory = await courseDirectory(segments[2]);
+      await serializeCourseWrite(async () => {
+        if (starting || job?.status === "running") throw new RequestError("另一个任务正在更新课程，请稍后重试。", 409);
+        await resolveChapterTitle(directory, segments[4], title);
+      });
+      return Response.json({ ok: true });
+    }
     if (url.pathname === "/api/jobs/input") {
       const body = await request.json();
       if (!body || typeof body !== "object" || Array.isArray(body)) throw new RequestError("请求格式无效。");
-      if (!job || !child || job.id !== body.id || job.status !== "awaiting-route") throw new RequestError("路线状态已变化，请刷新后重试。", 409);
-      if (body.confirm === true && body.route !== pendingRoute) throw new RequestError("教学路线已更新，请重新读取后确认。", 409);
-      if (body.defer === true) {
-        job.status = "running";
-        job.stage = "saved";
-        await (child.stdin as import("bun").FileSink).end();
-        return Response.json(job);
-      }
-      const input = body.confirm === true ? "confirm" : string(body.feedback, "调整意见");
-      if (body.confirm !== true && input.toLowerCase() === "confirm") throw new RequestError("请使用「确认并生成」按钮确认路线。");
-      job.status = "running";
-      job.stage = body.confirm === true ? "generating" : "route";
-      const sink = child.stdin as import("bun").FileSink;
-      sink.write(input.replace(/[\r\n]+/g, " ") + "\n");
-      await sink.flush();
+      const id = typeof body.id === "string" ? body.id : "";
+      const current = await center.view(id).catch(() => { throw new RequestError("任务不存在。", 404); });
+      if (body.defer === true) return Response.json(current); // closing a browser never cancels
+      try {
+        job = await center.decide(id, { confirm: body.confirm === true, route: body.route, feedback: body.feedback, retry: body.retry === true, cancel: body.cancel === true });
+      } catch (error) { throw new RequestError(error instanceof Error ? error.message : "任务状态已变化。", 409); }
       return Response.json(job);
     }
     if (url.pathname !== "/api/jobs") throw new RequestError("页面不存在。", 404);
-    if (starting || busy(job)) throw new RequestError("另一个任务正在进行，请先完成教学路线或等待任务结束。", 409);
+    if (starting || job?.status === "running") throw new RequestError("另一个任务正在进行，请先完成教学路线或等待任务结束。", 409);
     starting = true;
     submission = new Promise<void>((resolve) => { submissionFinished = resolve; });
     let upload: string | undefined;
     try {
+      await courseWrites;
       if (request.headers.get("content-type")?.startsWith("multipart/form-data")) {
+        if (busy(job)) throw new RequestError("请先处理当前待确认路线。", 409);
         const form = await request.formData();
         const course = string(form.get("course"), "课程名称", 160).normalize("NFC");
         const selection = string(form.get("selection"), "讲解范围", 300);
@@ -198,26 +302,44 @@ export async function startGui(options: Options) {
         upload = await mkdtemp(path.join(dataDir, ".upload-"));
         const pdfPath = path.join(upload, "material.pdf");
         await Bun.write(pdfPath, pdf);
-        const args = ["--course", course, "--pdf", pdfPath, mode === "pages" ? "--pages" : "--chapter", selection];
+        const paths = [];
         for (const [index, file] of screenshots.entries()) {
           const directory = path.join(upload, `screenshot-${index + 1}`);
           await mkdir(directory);
           const target = path.join(directory, file.name);
-          await Bun.write(target, file);
-          args.push("--screenshots", target);
+          await Bun.write(target, file); paths.push(target);
         }
-        return Response.json(launch("import", course, args, upload), { status: 202 });
+        const accepted = await admit("import", course, { pdf: pdfPath, [mode === "pages" ? "pages" : "chapter"]: selection, screenshots: paths });
+        await rm(upload, { recursive: true, force: true });
+        upload = undefined;
+        return Response.json(accepted, { status: 202 });
       }
       const body = await request.json();
       if (!body || typeof body !== "object" || Array.isArray(body)) throw new RequestError("请求格式无效。");
       const action = body.action as GuiAction;
+      if (busy(job) && action !== "resume") throw new RequestError("请先处理当前待确认路线。", 409);
       if (!["doctor", "resume", "generate", "revise", "memory"].includes(action)) throw new RequestError("不支持的操作。");
-      if (action === "doctor") return Response.json(launch(action, null, ["doctor"]), { status: 202 });
+      if (action === "doctor") return Response.json(launchDoctor(action, null, ["doctor"]), { status: 202 });
       const directory = await courseDirectory(string(body.courseId, "课程"));
       const course = (await readFile(path.join(directory, ".course-name"), "utf8")).trim();
       const args = ["--course", course, `--${action}`];
+      if (body.chapterId !== undefined) {
+        if (!["generate", "revise"].includes(action) || typeof body.chapterId !== "string") throw new RequestError("仅生成和修订讲解稿支持选择章节。");
+        const record = await readCourse(directory);
+        if (!record.chapters.some((chapter) => chapter.id === body.chapterId)) throw new RequestError("章节不存在。", 404);
+        if (record.chapters.find((chapter) => chapter.id === body.chapterId)?.needsConfirmation) {
+          throw new RequestError("章节名待确认，请先确认标题。");
+        }
+        args.push("--chapter-id", body.chapterId);
+      }
       if (action === "revise" || action === "memory") args.push(string(body.feedback, "反馈"));
-      return Response.json(launch(action, course, args), { status: 202 });
+      if (action === "resume") {
+        const selected = body.taskId ? await center.view(string(body.taskId, "任务")) : (await center.list()).filter(task => task.courseSlug === path.basename(directory)).at(-1);
+        if (selected && selected.courseSlug !== path.basename(directory)) throw new RequestError("任务不属于当前课程。", 409);
+        job = selected ?? await center.admit({ action: "import", course, config: await config(), resumeSaved: true }); center.resume();
+        return Response.json(job, { status: 202 });
+      }
+      return Response.json(await admit(action as "generate" | "revise" | "memory", course, { chapterId: body.chapterId, feedback: body.feedback }), { status: 202 });
     } catch (error) {
       if (upload) await rm(upload, { recursive: true, force: true });
       throw error;
@@ -247,7 +369,7 @@ export async function startGui(options: Options) {
         response.headers.set("x-frame-options", "DENY");
         return response;
       } catch (error) {
-        const status = error instanceof RequestError ? error.status : missing(error) ? 404 : error instanceof SyntaxError || error instanceof URIError ? 400 : 500;
+        const status = error instanceof RequestError ? error.status : missing(error) ? 404 : error instanceof SyntaxError || error instanceof URIError || error instanceof CourseStateError ? 400 : 500;
         return Response.json({ error: error instanceof RequestError ? error.message : status === 404 ? "文件不存在。" : status === 400 ? "请求格式无效。" : "无法完成请求，请检查本地文件与配置后重试。" }, { status });
       }
     },
@@ -262,6 +384,8 @@ export async function startGui(options: Options) {
     await submission;
     child?.kill("SIGTERM");
     await completion;
+    await center.close();
+    ownership.close();
     process.exit(0);
   };
   process.once("SIGINT", stop);

@@ -39,6 +39,8 @@ tutor --course "Digital Design" --data-dir .tutor --generate
 
 `draft.json` stores the candidate context, route and confirmation together. `--generate` rejects new PDF/page/screenshot options and requires a confirmed draft in the new process. Model and agent directory options still apply. A new import changes only the draft: cancelling it or failing its export leaves the published lecture and its `output/lecture.json` together. `--revise` always uses that published pair. A successful export publishes its metadata with the files; a failed export can be retried with `--generate`. Existing `context.json` / `route.md` courses are read without deleting those files, and legacy output is bound to that metadata before accepting a new import.
 
+Long-term course state additionally lives in `course.json`. Passing `--chapter-id <id>` to `--generate` selects one durable courseware chapter and publishes the same file set under `chapters/<chapter-id>/output/`. The chapter selection remains bound to its recorded material version. Whole-course `output/` and chapter outputs do not replace one another.
+
 ## Rebuild
 
 From the course output directory, rebuild the delivered PDF with:

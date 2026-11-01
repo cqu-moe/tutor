@@ -1,6 +1,8 @@
 # Tutor：组合现成工具的个人课程讲解 Agent
 
-状态：已发布为 [GitHub Issue #1](https://github.com/cqu-moe/tutor/issues/1)，标签为 `ready-for-agent`；用户已确认测试边界。
+本文是第一版规格的历史快照，保留当时的实现决策与验证状态。当前课程学习、分层记忆和中断恢复需求见 [规格 #13](https://github.com/cqu-moe/tutor/issues/13)，当前使用与开发入口见 [README](../README.md)。
+
+历史状态（第一版规格发布时）：已发布为 [GitHub Issue #1](https://github.com/cqu-moe/tutor/issues/1)，标签为 `ready-for-agent`；用户已确认测试边界。
 
 ## Problem Statement
 

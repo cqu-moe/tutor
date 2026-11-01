@@ -2,6 +2,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createPhotonImages } from "@earendil-works/pi-durable/images";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { bedrockProviderModule } from "@earendil-works/pi-ai/bedrock-provider";
 import { setBedrockProviderModule } from "@earendil-works/pi-ai/compat";
@@ -14,6 +16,14 @@ if (Bun.isStandaloneExecutable) {
 }
 
 let seccompPath: Promise<string> | undefined;
+let images: ReturnType<typeof createNodePhotonImages> | undefined;
+
+export function durableImages() {
+  images ??= Bun.isStandaloneExecutable
+    ? readFile(path.join(resources, "photon_rs_bg.wasm")).then(createPhotonImages)
+    : createNodePhotonImages({ worker: false });
+  return images;
+}
 
 export async function sandboxOptions() {
   if (process.platform !== "linux" || !Bun.isStandaloneExecutable) return {};

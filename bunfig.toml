@@ -1,2 +1,6 @@
 # Match the standalone executable: load environment files only when explicitly requested.
 env = false
+
+[install]
+registry = "https://registry.npmjs.org/"
+linker = "isolated"

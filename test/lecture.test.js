@@ -127,7 +127,11 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
     }
     if (!messages.includes("Write the complete lecture")) {
       routeRequests.push(payload);
-      return sse(response, { content: messages.includes("Start with gates") ? "## Confirmed order\nGates first; Boolean functions second.\nUser preference: concise Chinese." : "## Route\nBoolean functions first; gates second." });
+      if (prompt.includes("Start with gates")) {
+        return sse(response, { content: "## Confirmed order\n1. Chapter One\nGates first; Boolean functions second.\nUser preference: concise Chinese." });
+      }
+      const durableTitles = [...prompt.matchAll(/^\d+\.\s+(.+)$/gm)].map((match) => match[1]);
+      return sse(response, { content: `## Route\n${durableTitles.map((title, index) => `${index + 1}. ${title}`).join("\n")}\nBoolean functions first; gates second.` });
     }
     lectureRequests.push(payload);
     if (mode === "model-error") return response.writeHead(401).end(JSON.stringify({ error: { message: `Invalid key ${modelSecret}; upstream-private-detail` } }));
@@ -180,7 +184,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   assert.match(denied.stderr, /Confirm the teaching route/);
   assert.equal(lectureRequests.length, 0, "unconfirmed material must never reach generation");
 
-  const confirmed = await runCli(args, "Start with gates\nconfirm\nAdd the missing derivation\ndone\n", env);
+  const confirmed = await runCli([...common, "--resume"], "Start with gates\nconfirm\nAdd the missing derivation\ndone\n", env);
   assert.equal(confirmed.code, 0, confirmed.stderr);
   assert.match(confirmed.stdout, /Lecture exported/);
   assert.match(confirmed.stdout, /Lecture revised/);
@@ -206,7 +210,8 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
   await run("typst", ["compile", "--root", ".", "--font-path", "typst/fonts", "typst/document.typ", path.join(root, "rebuilt.pdf")], { cwd: output });
   const learnerMemory = await runCli([...common, "--memory", "Show my learner memory"], "", env);
   assert.equal(learnerMemory.code, 0, learnerMemory.stderr);
-  assert.match(learnerMemory.stdout, /empty or does not exist/, "generation without learner feedback must not create memory facts");
+  assert.match(learnerMemory.stdout, /Chapter One: pending/, "generation leaves chapter progress pending");
+  assert.doesNotMatch(learnerMemory.stdout, /#preference|#weakness|: learned|: in_progress/, "generation without learner feedback must not create facts or learning progress");
   const files = (await readdir(output, { recursive: true })).filter((file) => /\.(md|pdf|typ|svg|json)$/.test(file));
   const good = await Promise.all(files.map((file) => readFile(path.join(output, file))));
   // Generation is a separate caller: route/maintenance tests cannot catch it bypassing the shared guard.
@@ -254,7 +259,7 @@ test("confirmed CLI task exports portable lecture assets and preserves them on f
 
   const beforeReplacement = await readFile(path.join(output, "content.md"), "utf8");
   mode = "export-error";
-  const replacementFailure = await runCli(replacementArgs, "confirm\n", env);
+  const replacementFailure = await runCli([...common, "--resume"], "confirm\n", env);
   assert.equal(replacementFailure.code, 1);
   assert.match(replacementFailure.stderr, /Recto export failed/);
   assert.equal(await readFile(path.join(output, "content.md"), "utf8"), beforeReplacement);
