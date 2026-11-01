@@ -152,7 +152,7 @@ test("CLI creates and re-enters an empty course with one durable identity", { ti
   assert.equal(second.match(/course ([0-9a-f-]{36})/)?.[1], courseId);
 });
 
-test("CLI accumulates versioned chapters and protects learned entries", { timeout: 60_000 }, async () => {
+test("CLI accumulates versioned chapters and protects learned and in-progress entries", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "tutor-courses-accumulate-"));
   test.after(() => rm(root, { recursive: true, force: true }));
   const dataDir = path.join(root, "data");
@@ -172,14 +172,26 @@ test("CLI accumulates versioned chapters and protects learned entries", { timeou
     const payload = await requestBody(request);
     modelRequests.push(payload);
     if (modelRequests.length === 2) {
-      sse(response, "## Teaching order\n1. Boolean algebra\n2. Combinational logic\n3. Sequential logic\n4. Boolean algebra\n5. Combinational logic");
+      sse(response, "## Teaching order\n1. Combinational logic\n2. Boolean algebra\n3. Sequential logic\n4. Boolean algebra\n5. Combinational logic");
       return;
     }
     if (modelRequests.length === 3) {
-      sse(response, "## Teaching order\n1. Boolean algebra\n2. Combinational logic\n3. Sequential logic\n4. Boolean algebra v2\n5. Combinational logic v2\n6. Renamed pending chapter\n7. Combinational logic v3");
+      sse(response, "## Teaching order\n1. Sequential logic\n2. Combinational logic\n3. Boolean algebra\n4. Boolean algebra\n5. Combinational logic");
       return;
     }
     if (modelRequests.length === 4) {
+      sse(response, "## Teaching order\n1. Boolean algebra\n2. Sequential logic\n3. Combinational logic\n4. Boolean algebra\n5. Combinational logic");
+      return;
+    }
+    if (modelRequests.length === 5) {
+      sse(response, "## Teaching order\n1. Boolean algebra\n2. Combinational logic\n3. Boolean algebra\n4. Sequential logic\n5. Combinational logic");
+      return;
+    }
+    if (modelRequests.length === 6) {
+      sse(response, "## Teaching order\n1. Boolean algebra\n2. Combinational logic\n3. Sequential logic\n4. Boolean algebra v2\n5. Combinational logic v2\n6. Renamed pending chapter\n7. Combinational logic v3");
+      return;
+    }
+    if (modelRequests.length === 7) {
       sse(response, "## Teaching order\n1. Combinational logic\n2. Boolean algebra\n3. Sequential logic\n4. Boolean algebra v2\n5. Combinational logic v2\n6. Boolean algebra v3\n7. Combinational logic v3");
       return;
     }
@@ -211,30 +223,68 @@ test("CLI accumulates versioned chapters and protects learned entries", { timeou
   assert.match(chapters, /Sequential logic/);
   const learnedId = chapters.match(/\[pending\] 1\. Boolean algebra .*chapter ([0-9a-f-]{36})/)?.[1];
   const protectedId = chapters.match(/\[pending\] 2\. Combinational logic .*chapter ([0-9a-f-]{36})/)?.[1];
+  const sequentialId = chapters.match(/\[pending\] 3\. Sequential logic .*chapter ([0-9a-f-]{36})/)?.[1];
 
   await runCli([...common, "--chapter-id", learnedId, "--progress", "learned"], env);
   await runCli([...common, "--chapter-id", protectedId, "--progress", "in_progress"], env);
-  await runCli([...common, "--pdf", secondPdf, "--pages", "1-2"], env);
+  const courseDir = path.join(dataDir, "digital-design");
+  const previousCourse = await readFile(path.join(courseDir, "course.json"), "utf8");
+  const previousDraft = await readFile(path.join(courseDir, "draft.json"), "utf8");
+  for (const [input, title] of [
+    ["", "Combinational logic"],
+    ["Keep Combinational logic second; move Boolean algebra third.\n", "Boolean algebra"],
+    ["Keep Boolean algebra first; move Combinational logic third.\nconfirm\n", "Combinational logic"],
+  ]) {
+    await assert.rejects(
+      () => runCli([...common, "--pdf", secondPdf, "--pages", "1-2"], env, input),
+      new RegExp(`Teaching route would move protected chapter "${title}"`),
+    );
+    assert.equal(await readFile(path.join(courseDir, "course.json"), "utf8"), previousCourse);
+    assert.equal(await readFile(path.join(courseDir, "draft.json"), "utf8"), previousDraft);
+    const retained = await runCli([...common, "--chapters"], env);
+    assert.match(retained, /\[learned\] 1\. Boolean algebra/);
+    assert.match(retained, /\[in_progress\] 2\. Combinational logic/);
+    assert.equal(outputLines(retained).length, 4);
+  }
+  await runCli(
+    [...common, "--pdf", secondPdf, "--pages", "1-2"], env,
+    "Keep learned and in-progress chapters in place; move only pending chapters.\n",
+  );
   chapters = await runCli([...common, "--chapters"], env);
   assert.equal(outputLines(chapters).filter((line) => line.includes("Boolean algebra")).length, 2);
   assert.match(chapters, /\[learned\] 1\. Boolean algebra/);
-  assert.match(chapters, /\[pending\] 4\. Boolean algebra/);
+  assert.match(chapters, /\[pending\] 3\. Boolean algebra/);
+  assert.match(chapters, /\[pending\] 4\. Sequential logic/);
   const firstVersion = chapters.match(/lecture-v1\.pdf\s+([^\s·]+)/)?.[1];
   const secondVersion = chapters.match(/lecture-v2\.pdf\s+([^\s·]+)/)?.[1];
   assert.ok(firstVersion && secondVersion, chapters);
   assert.notEqual(firstVersion, secondVersion);
-  const secondBooleanId = chapters.match(/\[pending\] 4\. Boolean algebra .*chapter ([0-9a-f-]{36})/)?.[1];
+  const secondBooleanId = chapters.match(/\[pending\] 3\. Boolean algebra .*chapter ([0-9a-f-]{36})/)?.[1];
   const secondCombinationalId = chapters.match(/\[pending\] 5\. Combinational logic .*chapter ([0-9a-f-]{36})/)?.[1];
-  assert.match(chapters, /4\. Boolean algebra .*title needs confirmation/);
+  assert.match(chapters, /3\. Boolean algebra .*title needs confirmation/);
   assert.match(chapters, /5\. Combinational logic .*title needs confirmation/);
+  const expectedIds = [learnedId, protectedId, secondBooleanId, sequentialId, secondCombinationalId];
+  const pendingCourse = JSON.parse(await readFile(path.join(courseDir, "course.json"), "utf8"));
+  const pendingDraft = JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8"));
+  const pendingRoute = "## Teaching order\n1. Boolean algebra\n2. Combinational logic\n3. Boolean algebra\n4. Sequential logic\n5. Combinational logic";
+  assert.equal(pendingCourse.route.markdown, pendingRoute);
+  assert.equal(pendingDraft.route, pendingRoute);
+  assert.equal(pendingCourse.route.confirmedAt, null);
+  assert.deepEqual(pendingCourse.route.chapterIds, expectedIds);
   await runCli([...common, "--confirm-chapter", "--chapter-id", secondBooleanId, "--title", "Boolean algebra v2"], env);
   await runCli([...common, "--confirm-chapter", "--chapter-id", secondCombinationalId, "--title", "Combinational logic v2"], env);
+  const resolvedCourse = JSON.parse(await readFile(path.join(courseDir, "course.json"), "utf8"));
+  const resolvedDraft = JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8"));
+  const resolvedRoute = "## Teaching order\n1. Boolean algebra\n2. Combinational logic\n3. Boolean algebra v2\n4. Sequential logic\n5. Combinational logic v2\n";
+  assert.equal(resolvedCourse.route.markdown, resolvedRoute);
+  assert.equal(resolvedDraft.route, resolvedRoute);
+  assert.deepEqual(resolvedCourse.route.chapterIds, expectedIds);
 
   await runCli([...common, "--pdf", firstPdf, "--pages", "1-3"], env);
   const deduplicated = await runCli([...common, "--chapters"], env);
   assert.equal(outputLines(deduplicated).filter((line) => line.includes("Boolean algebra")).length, 2);
   assert.equal(ocrCalls, 5);
-  assert.equal(modelRequests.length, 2);
+  assert.equal(modelRequests.length, 5);
 
   const thirdPdf = await compileChapters(root, "lecture-v3", "F = x + yz", "Boolean algebra v3", "Combinational logic v3");
   await assert.rejects(

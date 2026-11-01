@@ -361,18 +361,6 @@ export async function recordCourseDraft(courseDir: string, lecture: import("./le
   if (titles.length !== ordered.length || [...expectedCounts].some(([title, count]) => routeCounts.get(title) !== count)) {
     throw new Error("Teaching route does not match the course chapters exactly; restore every courseware chapter and remove extra chapters");
   }
-  if (unresolved.length) {
-    if (lecture.context.confirmedAt) throw new Error(`${unresolved.length} chapter titles need confirmation before the route can be confirmed`);
-    course.route = {
-      version: course.route.version + 1,
-      markdown: lecture.route,
-      confirmedAt: null,
-      chapterIds: ordered.map((chapter) => chapter.id),
-    };
-    await saveCourse(courseDir, course);
-    return;
-  }
-
   const queues = new Map<string, CourseChapter[]>();
   for (const chapter of ordered) {
     const title = normalizedTitle(chapter.title);
@@ -385,6 +373,9 @@ export async function recordCourseDraft(courseDir: string, lecture: import("./le
     }
     return chapter.id;
   });
+  if (unresolved.length && lecture.context.confirmedAt) {
+    throw new Error(`${unresolved.length} chapter titles need confirmation before the route can be confirmed`);
+  }
   // The bug check below is intentional: no route update may replace a protected chapter's source or lecture binding.
   const protectedBefore = new Map(ordered
     .filter((chapter) => chapter.status === "in_progress" || chapter.status === "learned")
@@ -499,7 +490,7 @@ export async function resolveChapterTitle(courseDir: string, chapterId: string, 
   chapter.version += 1;
   course.route.version += 1;
   course.route.markdown = courseRouteMarkdown(course);
-  course.route.chapterIds = course.chapters.map((entry) => entry.id);
+  course.route.chapterIds = [...course.chapters].sort((a, b) => a.order - b.order).map((entry) => entry.id);
   await saveCourse(courseDir, course);
   await saveDraft(courseDir, lectureFromCourse(course));
   return course;
