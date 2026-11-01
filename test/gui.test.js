@@ -190,7 +190,7 @@ test("GUI import persists an adjusted route across restart without repeating OCR
       return { status: 401, message: `Invalid key ${modelSecret}; gui-upstream-fixture-detail` };
     }
     const adjustment = JSON.stringify(payload.messages).includes("Put logic gates first");
-    return { content: adjustment ? "## Adjusted route\n1. Logic gates" : "## Proposed route\n1. Boolean functions" };
+    return { content: adjustment ? "## Adjusted route\n1. 未命名资料" : "## Proposed route\n1. 未命名资料" };
   });
   await writeAgentConfig(agentDir, model.url, modelSecret);
 

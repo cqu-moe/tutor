@@ -49,7 +49,7 @@ export async function proposeRoute(
     ...context.pages.map((page) => `PDF page ${page.sourcePage}\n${page.markdown}`),
     ...context.screenshots.map((screenshot) => `Screenshot ${screenshot.name}\n${screenshot.markdown}`),
   ].join("\n\n");
-  const ask = `Course: ${context.course}${selectionScope(context.selection)}\n\n${sources}\n\nCompare the parsed formulas, tables, and figures with the attached original pages. Propose a teaching route for this exact range. Return only Markdown with: Scope, Prerequisites, Teaching order, and Material doubts. Include page citations.`;
+  const ask = `Course: ${context.course}${selectionScope(context.selection)}\n\nDurable course chapter order (title authority; keep every title, omit nothing, and add no numbered chapter):\n${lecture.route}\n\n${sources}\n\nCompare the parsed formulas, tables, and figures with the attached original pages. Propose a teaching route for this accumulated material. Return only Markdown with: Scope, Prerequisites, Teaching order, and Material doubts. The numbered Teaching order must contain exactly the durable courseware chapter titles. Include page citations.`;
   let output = "";
   let confirmed = false;
   try {

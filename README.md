@@ -4,6 +4,8 @@
 
 CLI 与本地浏览器工作台可从课程 PDF 生成可重建的讲解稿。安装依赖后，先导入资料并确认教学路线；确认时生成 Markdown、Typst、PDF 和图片，之后可用局部反馈继续修订。
 
+课程资料会持续累计：同一课程可追加新版课件，系统保留资料与章节的稳定身份、来源版本、显式学习进度和已生成的章节讲解。新增资料只调整未开始章节；正在学习和已学完章节的名称、位置、来源与讲解不会被自动替换。详见 [长期课程学习](docs/course-learning.md)。
+
 浏览器入口：`tutor gui`。支持上传资料、调整与确认路线、阅读和下载讲解稿、局部修订及学习反馈，详见 [GUI 使用说明](docs/gui.md)。
 
 ## 快速开始
@@ -36,6 +38,8 @@ tutor --env-file "$HOME/.config/tutor/env" \
 tutor --env-file "$HOME/.config/tutor/env" \
   --course "Digital Design" --data-dir .tutor \
   --revise "补充第 23 页 De Morgan 定律的完整推导"
+
+tutor --course "Digital Design" --data-dir .tutor --chapters
 ```
 
 学习者记忆、模型和 OCR 配置、导出依赖、失败保全以及验收步骤见下方文档。Tutor 仅通过显式 `--env-file FILE` 读取配置文件；已有环境变量优先，不自动扫描当前目录的 `.env`。`doctor` 只做本地诊断，不自动安装、不调用模型或 OCR API。
@@ -74,6 +78,7 @@ bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
 ## 项目文档
 
 - [GUI 使用说明](docs/gui.md)
+- [长期课程学习](docs/course-learning.md)
 - [第一版规格](docs/spec.md)
 - [安装与依赖检查](docs/install.md)
 - [工具组合与流程](docs/plan.md)

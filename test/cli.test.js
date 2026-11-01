@@ -122,7 +122,7 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
     const payload = JSON.parse(await body(request));
     modelRequests.push(payload);
     const adjustment = JSON.stringify(payload.messages).includes("Put logic gates first");
-    sse(response, adjustment ? "## Adjusted route\n1. Logic gates" : "## Proposed route\n1. Boolean algebra\nDoubt: table boundary");
+    sse(response, adjustment ? "## Adjusted route\n1. 未命名资料" : "## Proposed route\n1. 未命名资料\nDoubt: table boundary");
   });
   const modelAddress = await listen(model);
 
@@ -165,22 +165,19 @@ test("CLI proposes and adjusts a teaching route without confirmation", { timeout
     assert.equal(context.course, "Digital Design");
     assert.equal(context.pages[0].sourcePage, 1);
     await assert.rejects(() => readFile(path.join(dataDir, "digital-design", "output", "content.md")));
-
     const unconfirmed = await runCli([
       "--course", "Digital Design",
-      "--pdf", pdf,
-      "--pages", "1",
+      "--resume",
       "--data-dir", dataDir,
       "--agent-dir", agentDir,
       "--model", "tutorTest/route-model",
-      "--mineru-base-url", `http://${mineruAddress.address}:${mineruAddress.port}`,
     ], "", {
       ...process.env,
       MINERU_API_TOKEN: "test-only-token",
       NO_COLOR: "1",
     });
     assert.match(unconfirmed, /Route was not confirmed/);
-    assert.match(JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).route, /Proposed route/);
+    assert.match(JSON.parse(await readFile(path.join(dataDir, "digital-design", "draft.json"))).route, /Adjusted route/);
   } finally {
     await new Promise((resolve) => mineru.close(resolve));
     await new Promise((resolve) => model.close(resolve));

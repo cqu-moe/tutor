@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import Markdown from 'react-markdown';
 import { ArrowDownToLine, ChevronRight } from 'lucide-react';
@@ -7,6 +7,7 @@ import {
   PageState,
   Button,
   ActionButton,
+  Input,
   Label,
   Textarea,
   Tabs,
@@ -16,10 +17,13 @@ import {
   toast,
 } from '@cqu-moe/ui';
 import {
+  chapterFilePath,
   getDetail,
   filePath,
   post,
   request,
+  setChapterProgress,
+  setChapterTitle,
   type GuiDetail,
   type GuiState,
 } from './api';
@@ -30,6 +34,12 @@ import {
   ErrorNotice,
   JobStatus,
 } from './status';
+
+const progressLabels = {
+  pending: '未开始',
+  in_progress: '正在学',
+  learned: '已学完',
+} as const;
 
 function FeedbackForm({
   label,
@@ -100,6 +110,92 @@ function FeedbackForm({
     </form>
   );
 }
+
+function ChapterRow({
+  chapter,
+  routeConfirmed,
+  disabled,
+  onProgress,
+  onGenerate,
+  onDownload,
+  onResolveTitle,
+}: {
+  chapter: GuiDetail['chapters'][number];
+  routeConfirmed: boolean;
+  disabled: boolean;
+  onProgress: (status: keyof typeof progressLabels) => void;
+  onGenerate: () => void;
+  onDownload: (file: string) => void;
+  onResolveTitle: (title: string) => void;
+}) {
+  return (
+    <article className="chapter-row">
+      <div className="chapter-main">
+        <div className="row spread">
+          <h3>
+            {chapter.order}. {chapter.title}
+          </h3>
+          <span className="status-tag">
+            {progressLabels[chapter.status]}
+          </span>
+        </div>
+        <p>
+          {chapter.materialName} · 版本 {chapter.materialVersion.slice(0, 12)}
+          {chapter.needsConfirmation ? ' · 章节名待确认' : ''}
+        </p>
+        {chapter.needsConfirmation && (
+          <ChapterTitleForm
+            initialTitle={chapter.title}
+            disabled={disabled}
+            onResolve={onResolveTitle}
+          />
+        )}
+        <div className="row chapter-actions" role="group" aria-label={`标记 ${chapter.title} 的学习进度`}>
+          {(Object.keys(progressLabels) as Array<keyof typeof progressLabels>).map((status) => (
+            <Button
+              key={status}
+              variant={chapter.status === status ? 'secondary' : 'outline'}
+              size="sm"
+              disabled={disabled}
+              onClick={() => onProgress(status)}
+            >
+              {progressLabels[status]}
+            </Button>
+          ))}
+        </div>
+      </div>
+      <div className="chapter-side">
+        {chapter.needsConfirmation ? (
+          <p className="hint">章节名待确认；确认后才能生成讲解。</p>
+        ) : routeConfirmed ? (
+          <Button
+            variant="outline"
+            disabled={disabled}
+            onClick={onGenerate}
+          >
+            {chapter.lecture.status === 'published' ? '重新生成本章' : '生成本章讲解'}
+          </Button>
+        ) : (
+          <p className="hint">确认路线后可生成本章讲解。</p>
+        )}
+        {chapter.lecture.status === 'published' && (
+          <>
+            <Button variant="ghost" onClick={() => onDownload('document.pdf')}>
+              <ArrowDownToLine aria-hidden="true" />
+              本章 PDF
+            </Button>
+            {chapter.lecture.content && (
+              <details className="chapter-lecture">
+                <summary>阅读本章讲解稿</summary>
+                <SafeMarkdown>{chapter.lecture.content}</SafeMarkdown>
+              </details>
+            )}
+          </>
+        )}
+      </div>
+    </article>
+  );
+ }
 export function Course({
   state,
   refresh,
@@ -171,6 +267,54 @@ export function Course({
       toast.error((error as Error).message);
     }
   }
+  async function downloadChapter(chapterId: string, file: string) {
+    try {
+      const response = await request(chapterFilePath(id, chapterId, file));
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.split('/').at(-1)!;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      toast.error((error as Error).message);
+    }
+  }
+  async function markProgress(
+    chapterId: string,
+    status: keyof typeof progressLabels,
+  ) {
+    if (lock.current || active(state.job)) return;
+    lock.current = true;
+    setSending(true);
+    setError('');
+    try {
+      await setChapterProgress(id, chapterId, status);
+      setReload((value) => value + 1);
+      refresh();
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      lock.current = false;
+      setSending(false);
+    }
+  }
+  async function confirmChapterTitle(chapterId: string, title: string) {
+    if (lock.current || active(state.job)) return;
+    lock.current = true;
+    setSending(true);
+    setError('');
+    try {
+      await setChapterTitle(id, chapterId, title);
+      setReload((value) => value + 1);
+      refresh();
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      lock.current = false;
+      setSending(false);
+    }
+  }
   if (!course)
     return (
       <>
@@ -194,7 +338,7 @@ export function Course({
       </Link>
       <PageHeader
         title={course.name}
-        description={`${pageRange(course.pages)} · ${courseStatus(course)}`}
+        description={`${pageRange(course.pages)} · ${course.materials} 份资料 · ${course.chapters.length} 个章节 · ${courseStatus(course)}`}
         actions={
           course.published && (
             <Button
@@ -259,6 +403,40 @@ export function Course({
                       )
                     }
                   />
+                )}
+                {detail.chapters.length > 0 && (
+                  <div className="chapter-section">
+                    <h2>课程章节</h2>
+                    <p className="hint">
+                      章节名来自课件资料；学习位置只在你点击状态按钮后改变。
+                    </p>
+                    <div className="chapter-list">
+                      {detail.chapters.map((chapter) => (
+                        <ChapterRow
+                          key={chapter.id}
+                          chapter={chapter}
+                          routeConfirmed={course.confirmed}
+                          disabled={sending || active(state.job)}
+                          onProgress={(status) =>
+                            void markProgress(chapter.id, status)
+                          }
+                          onGenerate={() =>
+                            void action({
+                              action: 'generate',
+                              courseId: id,
+                              chapterId: chapter.id,
+                            }).catch(() => {})
+                          }
+                          onDownload={(file) =>
+                            void downloadChapter(chapter.id, file)
+                          }
+                          onResolveTitle={(title) =>
+                            void confirmChapterTitle(chapter.id, title)
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
                 )}
               </section>
               <aside className="stack context-note">
@@ -438,6 +616,40 @@ export function Course({
         </Tabs>
       )}
     </>
+  );
+}
+
+function ChapterTitleForm({
+  initialTitle,
+  disabled,
+  onResolve,
+}: {
+  initialTitle: string;
+  disabled: boolean;
+  onResolve: (title: string) => void;
+}) {
+  const [title, setTitle] = useState(initialTitle);
+  const id = useId();
+  return (
+    <form
+      className="chapter-title-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!disabled && title.trim()) onResolve(title);
+      }}
+    >
+      <Label htmlFor={id}>确认课件章节名</Label>
+      <Input
+        id={id}
+        value={title}
+        maxLength={300}
+        required
+        onChange={(event) => setTitle(event.target.value)}
+      />
+      <Button type="submit" variant="outline" disabled={disabled || !title.trim()}>
+        确认章节名
+      </Button>
+    </form>
   );
 }
 function SafeMarkdown({ children }: { children: string }) {

@@ -120,7 +120,7 @@ test("default model receives original page and screenshot images", { timeout: 30
   const model = createServer(async (request, response) => {
     const payload = JSON.parse(await body(request));
     requests.push(payload);
-    sse(response, "## Proposed route\n1. Boolean algebra");
+    sse(response, "## Proposed route\n1. 未命名资料");
   });
   const modelAddress = await listen(model);
 
@@ -228,7 +228,7 @@ test("model failures are actionable, redacted, and preserve course work", { time
       response.end(JSON.stringify({ error: { message: `Invalid API key: ${modelSecret}; access ${oauthSecret}; upstream-private-detail` } }));
       return;
     }
-    sse(response, "## Proposed route");
+    sse(response, "## Proposed route\n1. 未命名资料");
   });
   const modelAddress = await listen(model);
 
@@ -275,7 +275,7 @@ test("model failures are actionable, redacted, and preserve course work", { time
           return true;
         },
       );
-      await readFile(path.join(dataDir, "digital-design", "draft.json"));
+      await readFile(path.join(dataDir, "digital-design", "course.json"));
     }
     assert.deepEqual(modelRequests.map((request) => request.model), ["failing-model"]);
   } finally {

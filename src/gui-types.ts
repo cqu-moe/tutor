@@ -9,12 +9,22 @@ export type GuiJob = {
 };
 export type GuiCourse = {
   id: string;
+  courseId: string;
   name: string;
   pages: number[];
   screenshots: number;
   confirmed: boolean;
   hasRoute: boolean;
   published: boolean;
+  materials: number;
+  chapters: Array<{
+    id: string;
+    title: string;
+    status: "pending" | "in_progress" | "learned";
+    order: number;
+    needsConfirmation: boolean;
+    lecturePublished: boolean;
+  }>;
   updatedAt: string;
   error?: string;
 };
@@ -23,4 +33,25 @@ export type GuiState = {
   job: GuiJob | null;
   config: { model: string; ocr: string; dataDir: string };
 };
-export type GuiDetail = { route: string; content: string; files: string[] };
+export type GuiChapterDetail = {
+  id: string;
+  title: string;
+  status: "pending" | "in_progress" | "learned";
+  order: number;
+  materialName: string;
+  materialVersion: string;
+  needsConfirmation: boolean;
+  lecture: {
+    status: "none" | "generating" | "published" | "failed";
+    content: string;
+    files: string[];
+  };
+};
+
+export type GuiDetail = {
+  courseId: string;
+  route: string;
+  content: string;
+  files: string[];
+  chapters: GuiChapterDetail[];
+};

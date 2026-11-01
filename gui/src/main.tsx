@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type MouseEvent,
 } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -288,6 +289,8 @@ function Courses({ state, refresh }: { state: GuiState; refresh: () => void }) {
                     </Link>
                     <p>
                       {pageRange(course.pages)}
+                      {` · ${course.materials} 份资料`}
+                      {` · ${course.chapters.length} 个章节`}
                       {course.screenshots
                         ? ` · ${course.screenshots} 张截图`
                         : ''}
@@ -339,6 +342,7 @@ function ImportCourse({
   const [file, setFile] = useState<File>();
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [creating, setCreating] = useState(false);
   const lock = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -382,6 +386,32 @@ function ImportCourse({
     } finally {
       lock.current = false;
       setSubmitting(false);
+    }
+  }
+  async function createEmpty(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    if (lock.current || active(state.job)) return;
+    const form = event.currentTarget.form;
+    if (!form) return;
+    const name = String(new FormData(form).get('course')).trim().normalize('NFC');
+    if (!name) {
+      setError('先填写课程名称，再建立空课程。');
+      form.querySelector<HTMLInputElement>('#course-name')?.focus();
+      return;
+    }
+    lock.current = true;
+    setCreating(true);
+    setError('');
+    try {
+      const created = await post('/api/courses', { name });
+      const createdBody = await created.json();
+      refresh();
+      navigate(`/courses/${encodeURIComponent(createdBody.id)}`);
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      lock.current = false;
+      setCreating(false);
     }
   }
   return (
@@ -510,6 +540,14 @@ function ImportCourse({
             />
             <Button asChild variant="ghost">
               <Link to="/">返回课程</Link>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={active(state.job) || submitting || creating}
+              onClick={(event) => void createEmpty(event)}
+            >
+              {creating ? '正在建立…' : '先建立空课程'}
             </Button>
           </div>
         </form>

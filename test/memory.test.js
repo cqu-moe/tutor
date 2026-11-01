@@ -62,6 +62,9 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   const pdf = path.join(root, "lecture.pdf");
   await writeFile(path.join(root, "lecture.typ"), "#set page(width: 2cm, height: 2cm)\nSynthetic course\n");
   await run("typst", ["compile", path.join(root, "lecture.typ"), pdf]);
+  const feedbackPdf = path.join(root, "feedback.pdf");
+  await writeFile(path.join(root, "feedback.typ"), "#set page(width: 2cm, height: 2cm)\nSynthetic course, second edition\n");
+  await run("typst", ["compile", path.join(root, "feedback.typ"), feedbackPdf]);
   await writeFile(path.join(root, "full.md"), "# Synthetic course\nBoolean functions and gates.\n");
   await run("/usr/bin/zip", ["-q", "-j", path.join(root, "result.zip"), path.join(root, "full.md")]);
   const zip = await readFile(path.join(root, "result.zip"));
@@ -114,7 +117,7 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
     ...args(course), "--pdf", pdf, "--pages", "1", "--mineru-base-url", ocrUrl,
   ], responses, input);
 
-  await route("Digital Design", [say("## Route\nBoolean basics, then gates")]);
+  await route("Digital Design", [say("## Route\n1. 未命名资料\nBoolean basics, then gates")]);
   assert.match(await memory("Digital Design", "Show current learner memory"), /empty or does not exist/);
 
   await rm(path.join(dataDir, "digital-design", ".course-name"));
@@ -140,13 +143,15 @@ test("CLI learner feedback survives restart; memory can be read, corrected, forg
   assert.match(unowned.stderr, /move the directory aside|create \.course-name|use a different --data-dir/);
   assert.equal(requests.length, 0, "an unowned legacy course directory must fail before model/memory work");
 
-  await route("Digital Design", [say("## Route\nBoolean basics"), write(preference), write(progress), write(weakness), say("## Revised route\nGates, with De Morgan practice")],
+  await invoke([
+    ...args("Digital Design"), "--pdf", feedbackPdf, "--pages", "1", "--mineru-base-url", ocrUrl,
+  ], [say("## Route\n1. 未命名资料\n2. 未命名资料\nBoolean basics"), write(preference), write(progress), write(weakness), say("## Revised route\n1. 未命名资料\n2. 未命名资料\nGates, with De Morgan practice")],
     "Detailed derivations work best across courses. I already learned Boolean basics. In the optional exercise I swapped De Morgan variables twice.\n");
   const recalled = await memory("Digital Design", "Show current learner memory");
   for (const fact of [progress, preference, weakness]) assert.ok(recalled.includes(fact), recalled);
 
   await memory("Calculus", "I already learned Boolean basics in a prerequisite", [write(otherProgress), echo]);
-  await route("Calculus", [read, say("## Calculus route\nLimits"), say("## Current request\nOne compact example")], "Only for this route use one compact example\n");
+  await route("Calculus", [read, say("## Calculus route\n1. 未命名资料\nLimits"), say("## Current request\n1. 未命名资料\nOne compact example")], "Only for this route use one compact example\n");
   const context = requests[0].messages.filter((m) => m.role === "system" || m.role === "developer").map((m) => m.content).join("\n");
   assert.match(context, /\[\[course:calculus\]\]/);
   assert.ok(context.includes(progress) && context.includes(preference));

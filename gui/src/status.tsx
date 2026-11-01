@@ -29,16 +29,15 @@ const stageLabel = (job: GuiJob) =>
           ? '教学路线已保存，稍后可继续'
           : '任务已完成'
         : (stages[job.stage] ?? '正在处理');
-export const courseStatus = (course: GuiCourse) =>
-  course.error
-    ? '需要检查'
-    : !course.confirmed && course.hasRoute
-      ? '待确认路线'
-      : course.published
-        ? '已有讲解稿'
-        : course.confirmed
-          ? '待生成讲解稿'
-          : '待导入资料';
+export function courseStatus(course: GuiCourse) {
+  if (course.error) return '需要检查';
+  const learned = course.chapters.filter((chapter) => chapter.status === 'learned').length;
+  if (learned) return `${learned}/${course.chapters.length} 已学`;
+  if (course.chapters.some((chapter) => chapter.status === 'in_progress')) return '正在学习';
+  if (!course.confirmed && course.hasRoute) return '待确认路线';
+  if (course.published) return '已有讲解稿';
+  return course.confirmed ? '待生成讲解稿' : '待导入资料';
+}
 export const pageRange = (pages: number[]) => {
   if (!pages.length) return '尚无页面';
   return pages.length === 1

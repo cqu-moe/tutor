@@ -6,13 +6,13 @@ import type { Lecture } from "./lecture-state.ts";
 
 const execute = promisify(execFile);
 
-export async function exportLecture(courseDir: string, source: string, lecture: Lecture) {
+export async function exportLecture(courseDir: string, source: string, lecture: Lecture, outputDirectory?: string) {
   const rectoRoot = process.env.TUTOR_RECTO_ROOT;
   if (!rectoRoot) throw new Error(`Set TUTOR_RECTO_ROOT to the installed Recto skill directory; source retained at ${source}`);
   const stage = await mkdtemp(path.join(courseDir, ".export-"));
   const next = path.join(stage, "output");
   const previous = path.join(stage, "previous-output");
-  const output = path.join(courseDir, "output");
+  const output = outputDirectory ? path.resolve(courseDir, outputDirectory) : path.join(courseDir, "output");
   let backedUp = false;
   try {
     const python = process.env.TUTOR_PYTHON ?? "python3";
@@ -46,6 +46,7 @@ export async function exportLecture(courseDir: string, source: string, lecture: 
     await execute("typst", ["compile", "--root", ".", "--font-path", "typst/fonts",
       "typst/document.typ", "document.pdf"], { cwd: next, maxBuffer: 32 * 1024 * 1024 });
     await writeFile(path.join(next, "lecture.json"), `${JSON.stringify(lecture, null, 2)}\n`);
+    await mkdir(path.dirname(output), { recursive: true });
     try {
       await rename(output, previous);
       backedUp = true;

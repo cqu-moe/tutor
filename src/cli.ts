@@ -2,6 +2,7 @@
 import "./assets.ts";
 import { loadEnvFile } from "node:process";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { access, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -17,6 +18,11 @@ import { createTutorSession } from "./runtime.ts";
 import { promptWithMemory } from "./memory.ts";
 import { reviseLecture } from "./revision.ts";
 import { readDraft, readPublishedLecture, saveDraft, type Lecture } from "./lecture-state.ts";
+import {
+  addCourseMaterial, chapterLecture, chapterLine, claimCourseDirectory, courseDirectory, ensureCourse, hasCourseMaterial,
+  lectureFromCourse, readCourse, recordChapterLecture, recordCourseDraft, resolveChapterTitle, updateChapterProgress,
+  type ChapterProgress, type CourseChapter, type CourseChapterSource,
+} from "./course-state.ts";
 import type { ChapterSelection, Context, Input } from "./types.ts";
 import pdfChapters from "../scripts/pdf_chapters.py" with { type: "text" };
 import pkg from "../package.json";
@@ -72,6 +78,20 @@ async function command(command: string, args: string[]) {
   }
 }
 
+async function optionalFile(file: string) {
+  try {
+    return await readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return null;
+  }
+}
+
+async function restoreFile(file: string, contents: string | null) {
+  if (contents === null) await rm(file, { force: true });
+  else await writeFile(file, contents);
+}
+
 async function pdfPageCount(pdf: string) {
   const info = (await command("pdfinfo", [pdf])).stdout;
   const pages = Number(info.match(/^Pages:\s+(\d+)$/m)?.[1]);
@@ -108,59 +128,73 @@ async function selectChapter(value: string | undefined, pdf: string, pageCount: 
   return { selection, pages: Array.from({ length: endPage - selected.page + 1 }, (_, index) => selected.page + index) };
 }
 
-async function courseDirectory(course: string, dataDir: string) {
-  const slug = course.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-|-$/g, "");
-  if (!slug) throw new Error("--course must contain a course name");
-  return path.resolve(dataDir, slug);
+function chapterFromBookmark(bookmark: PdfChapter, next: PdfChapter | undefined, pageCount: number, materialId: string, materialVersion: string, needsConfirmation: boolean): Omit<CourseChapter, "version" | "status" | "order" | "progressUpdatedAt" | "lecture"> {
+  const endPage = next?.page ?? pageCount;
+  const source: CourseChapterSource = {
+    materialId,
+    materialVersion,
+    startPage: bookmark.page,
+    endPage,
+    startHeading: bookmark.title,
+    endHeading: next?.title ?? null,
+  };
+  return { id: randomUUID(), title: bookmark.title, order: 0, source, needsConfirmation };
 }
 
-async function claimCourseDirectory(course: string, courseDir: string) {
-  const marker = path.join(courseDir, ".course-name");
-  const rejectCollision = (owner: string) => {
-    throw new Error(`Course directory "${path.basename(courseDir)}" already belongs to ${JSON.stringify(owner)}; use the existing course name or a different --data-dir`);
-  };
-  try {
-    const saved = await readFile(marker, "utf8");
-    if (normalizedText(saved) !== course) rejectCollision(saved.trim());
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+async function chapterAdmissions(pdf: string, pageCount: number, pages: number[], materialVersion: string, selection?: ChapterSelection) {
+  const materialId = randomUUID();
+  if (selection) {
+    return [{
+      id: randomUUID(),
+      title: selection.title,
+      order: 0,
+      source: {
+        materialId,
+        materialVersion,
+        startPage: selection.startPage,
+        endPage: selection.endPage,
+        startHeading: selection.startHeading,
+        endHeading: selection.endHeading,
+      },
+      needsConfirmation: false,
+    }];
   }
 
-  let existed = true;
-  try {
-    await access(courseDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    existed = false;
+  const chapters: PdfChapter[] = JSON.parse((await command(process.env.TUTOR_PYTHON ?? "python3", ["-c", pdfChapters, pdf])).stdout);
+  const selectedPages = new Set(pages);
+  const matches = chapters.filter((chapter) => selectedPages.has(chapter.page));
+  if (!matches.length) {
+    return [{
+      id: randomUUID(),
+      title: "未命名资料",
+      order: 0,
+      source: {
+        materialId,
+        materialVersion,
+        startPage: pages[0],
+        endPage: pages.at(-1),
+        startHeading: undefined,
+        endHeading: null,
+      },
+      needsConfirmation: true,
+    }];
   }
-  await mkdir(courseDir, { recursive: true });
-  let owner: string | undefined;
-  try {
-    let context: Context;
-    try {
-      context = JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8")).context;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      context = JSON.parse(await readFile(path.join(courseDir, "context.json"), "utf8"));
-    }
-    owner = normalizedText(context.course ?? "");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  const titleCounts = new Map<string, number>();
+  for (const chapter of matches) {
+    const title = normalizedText(chapter.title);
+    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
   }
-  if (owner && owner !== course) rejectCollision(owner);
-  if (!owner && existed) {
-    throw new Error(
-      `Cannot determine the course name for directory "${path.basename(courseDir)}"; move it aside, create .course-name containing the exact original course name, or use a different --data-dir`,
+  return matches.map((chapter) => {
+    const next = chapters.slice(chapters.indexOf(chapter) + 1).find((entry) => entry.level <= chapter.level);
+    return chapterFromBookmark(
+      chapter,
+      next,
+      pageCount,
+      materialId,
+      materialVersion,
+      (titleCounts.get(normalizedText(chapter.title)) ?? 1) > 1,
     );
-  }
-  try {
-    await writeFile(marker, `${course}\n`, { flag: "wx" });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const saved = await readFile(marker, "utf8");
-    if (normalizedText(saved) !== course) rejectCollision(saved.trim());
-  }
+  });
 }
 
 async function prepareMaterials(pdf: string, pages: number[], screenshots: string[], courseDir: string) {
@@ -289,6 +323,11 @@ async function main() {
       pdf: { type: "string" },
       pages: { type: "string" },
       chapter: { type: "string" },
+      "chapter-id": { type: "string" },
+      chapters: { type: "boolean" },
+      "confirm-chapter": { type: "boolean" },
+      title: { type: "string" },
+      progress: { type: "string" },
       screenshots: { type: "string", multiple: true },
       "data-dir": { type: "string", default: ".tutor" },
       "agent-dir": { type: "string" },
@@ -332,17 +371,56 @@ async function main() {
   if (!values.course) throw new Error("--course is required");
   const course = normalizedText(values.course);
   const courseDir = await courseDirectory(course, values["data-dir"]!);
+  if (values["confirm-chapter"]) {
+    if (values.chapters || values.generate || values.resume || values.memory !== undefined || values.revise || values.pdf || values.pages || values.chapter || values.screenshots || values.progress !== undefined) {
+      throw new Error("--confirm-chapter only resolves one chapter title; omit the other action options");
+    }
+    if (!values["chapter-id"]) throw new Error("--confirm-chapter requires --chapter-id");
+    if (!values.title?.trim()) throw new Error("--confirm-chapter requires --title");
+    await claimCourseDirectory(course, courseDir);
+    await ensureCourse(courseDir, course);
+    await resolveChapterTitle(courseDir, values["chapter-id"], values.title);
+    return;
+  }
+  if (values.progress !== undefined) {
+    if (values.chapters || values.generate || values.resume || values.memory !== undefined || values.revise || values.pdf || values.pages || values.chapter || values.screenshots) {
+      throw new Error("--progress only updates one chapter; omit the other action options");
+    }
+    if (!values["chapter-id"]) throw new Error("--progress requires --chapter-id");
+    if (values.progress !== "pending" && values.progress !== "in_progress" && values.progress !== "learned") {
+      throw new Error("--progress must be pending, in_progress, or learned");
+    }
+    await claimCourseDirectory(course, courseDir);
+    await ensureCourse(courseDir, course);
+    await updateChapterProgress(courseDir, values["chapter-id"], values.progress as ChapterProgress);
+    return;
+  }
+  if (values.chapters) {
+    if (values.generate || values.resume || values.memory !== undefined || values.revise || values.pdf || values.pages || values.chapter || values.screenshots) {
+      throw new Error("--chapters only displays the course route; omit the action options");
+    }
+    await claimCourseDirectory(course, courseDir);
+    const record = await ensureCourse(courseDir, course);
+    console.log(`Course ${record.name} · course ${record.id}`);
+    if (!record.chapters.length) console.log("No chapters yet; import courseware or record course memory first.");
+    for (const chapter of [...record.chapters].sort((a, b) => a.order - b.order)) {
+      console.log(chapterLine(chapter, record.materials.find((material) => material.id === chapter.source.materialId)));
+    }
+    return;
+  }
   if (values.revise) {
     if (values.generate || values.resume || values.memory !== undefined || values.pdf || values.pages || values.chapter || values.screenshots) {
       throw new Error("--revise uses the saved confirmed lecture; omit import, --generate, and --memory options");
     }
     await claimCourseDirectory(course, courseDir);
+    await ensureCourse(courseDir, course);
     await deliverRevision(courseDir, values["agent-dir"], values.model, values.revise);
     return;
   }
   if (values.memory !== undefined) {
     if (!values.memory.trim()) throw new Error("--memory requires a learner-memory request");
     await claimCourseDirectory(course, courseDir);
+    await ensureCourse(courseDir, course);
     const session = await createTutorSession(courseDir, values["agent-dir"], values.model, { tools: [] });
     try {
       console.log(await promptWithMemory(session, `Course: ${course}\nLearner memory request: ${values.memory}`));
@@ -354,13 +432,26 @@ async function main() {
   if (values.generate) {
     if (values.resume || values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--generate uses the saved confirmed materials; omit new input options");
     await claimCourseDirectory(course, courseDir);
-    await deliverLecture(await readDraft(courseDir), courseDir, values["agent-dir"], values.model);
+    await ensureCourse(courseDir, course);
+    if (values["chapter-id"]) {
+      const course = await readCourse(courseDir);
+      const lecture = chapterLecture(course, values["chapter-id"]);
+      const output = await deliverLecture(
+        lecture, courseDir, values["agent-dir"], values.model,
+        path.join("chapters", values["chapter-id"], "output"),
+      );
+      await recordChapterLecture(courseDir, values["chapter-id"], "published", output);
+    } else {
+      await deliverLecture(await readDraft(courseDir), courseDir, values["agent-dir"], values.model);
+    }
     return;
   }
   let lecture: Lecture;
+  let routeRollback: { course: string | null; draft: string | null } | null = null;
   if (values.resume) {
     if (values.pdf || values.pages || values.chapter || values.screenshots) throw new Error("--resume uses the saved teaching route; omit new input options");
     await claimCourseDirectory(course, courseDir);
+    await ensureCourse(courseDir, course);
     lecture = await readDraft(courseDir);
     if (lecture.context.confirmedAt) throw new Error("Route is already confirmed; use --generate");
   } else {
@@ -381,10 +472,18 @@ async function main() {
     const chapter = values.chapter ? await selectChapter(values.chapter, pdf, pageCount) : undefined;
     const pages = chapter ? chapter.pages : parsePages(values.pages, pageCount);
     await claimCourseDirectory(course, courseDir);
+    await ensureCourse(courseDir, course);
     await readPublishedLecture(courseDir);
     const mineruBaseUrl = values["mineru-base-url"]!.replace(/\/$/, "");
     const mistralBaseUrl = values["mistral-base-url"]!.replace(/\/$/, "");
     const inputs = await prepareMaterials(pdf, pages, screenshots, courseDir);
+    const sourceHash = inputs.find((input) => input.kind === "pdf-page")?.contentHash ?? randomUUID();
+    const importedScreenshots = inputs.filter((input) => input.kind === "screenshot")
+      .map((input) => ({ name: input.name, source: input.uploadPath, parsedDirectory: "", markdown: "" }));
+    if (hasCourseMaterial(await readCourse(courseDir, course), sourceHash, pages, importedScreenshots)) {
+      console.log(`No new material: ${path.basename(pdf)} is already part of this course.`);
+      return;
+    }
     const pending = await uncachedInputs(
       inputs,
       courseDir,
@@ -405,13 +504,44 @@ async function main() {
       }
     }
     const context = await buildContext(course, inputs, courseDir, chapter?.selection);
-    lecture = { context, route: "" };
+    const admissions = await chapterAdmissions(pdf, pageCount, pages, sourceHash, chapter?.selection);
+    routeRollback = {
+      course: await optionalFile(path.join(courseDir, "course.json")),
+      draft: await optionalFile(path.join(courseDir, "draft.json")),
+    };
+    const admitted = await addCourseMaterial(courseDir, {
+      name: path.basename(pdf),
+      sourceHash,
+      sourcePages: pages,
+      pages: context.pages,
+      screenshots: context.screenshots,
+      chapters: admissions,
+    }, course);
+    if (!admitted.added) {
+      console.log(`No new material: ${path.basename(pdf)} is already part of this course.`);
+      return;
+    }
+    const latestMaterial = admitted.course.materials.at(-1);
+    lecture = lectureFromCourse(
+      admitted.course,
+      chapter?.selection || latestMaterial?.chapterIds.length === 1 ? latestMaterial?.id : undefined,
+    );
     await saveDraft(courseDir, lecture);
   }
   const input = createTerminalInput();
   try {
     process.send?.({ type: "stage", stage: "route" });
-    await proposeRoute(lecture, courseDir, values["agent-dir"], values.model, input, values.resume);
+    try {
+      await proposeRoute(lecture, courseDir, values["agent-dir"], values.model, input, values.resume);
+      await recordCourseDraft(courseDir, lecture);
+      routeRollback = null;
+    } catch (error) {
+      if (routeRollback && !(error instanceof Error && /chapter titles need confirmation/.test(error.message))) {
+        await restoreFile(path.join(courseDir, "course.json"), routeRollback.course);
+        await restoreFile(path.join(courseDir, "draft.json"), routeRollback.draft);
+      }
+      throw error;
+    }
     if (!lecture.context.confirmedAt) return;
     await deliverLecture(lecture, courseDir, values["agent-dir"], values.model);
     if (process.send) return;
@@ -428,11 +558,17 @@ async function main() {
   }
 }
 
-async function deliverLecture(lecture: Lecture, courseDir: string, agentDir: string | undefined, model: string | undefined) {
+async function deliverLecture(
+  lecture: Lecture,
+  courseDir: string,
+  agentDir: string | undefined,
+  model: string | undefined,
+  outputDirectory?: string,
+) {
   process.send?.({ type: "stage", stage: "generating" });
   const source = await generateLecture(lecture, courseDir, agentDir, model);
   process.send?.({ type: "stage", stage: "exporting" });
-  const output = await exportLecture(courseDir, source, lecture);
+  const output = await exportLecture(courseDir, source, lecture, outputDirectory);
   await rm(path.dirname(source), { recursive: true, force: true }).catch(() => {
     console.warn(`Export succeeded; generation draft remains at ${source}`);
   });
