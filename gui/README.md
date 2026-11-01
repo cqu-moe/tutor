@@ -3,10 +3,10 @@
 使用 CQU Moe Design theme/UI 1.1.0、Lucide 1.48.0。界面通过设计系统官方生成器建立，组件从 `@cqu-moe/ui` 导入，设计包保存在 `.design/`。
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm build
-pnpm check:design
 cd ..
+bun install --frozen-lockfile
+bun run --filter @cqu-moe/tutor-gui build
+bun run check:design
 bun run gui
 ```
 

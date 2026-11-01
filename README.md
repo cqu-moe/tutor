@@ -43,23 +43,22 @@ tutor --env-file "$HOME/.config/tutor/env" \
 ## 开发与构建
 
 ```sh
-bun install --frozen-lockfile --ignore-scripts
-cd gui
-pnpm install --frozen-lockfile
-cd ..
+bun install --frozen-lockfile
 bun run tutor --help
+bun run check:design
+bun run typecheck
 bun run build
 # 可选：构建所有支持的平台
 bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
 ```
 
-前端开发构建需 Node.js 22.12+ 与 pnpm 11.19.0。`bun run build` 自动构建并内嵌 GUI 静态资源。
+主程序与 GUI 共用根工作区和 `bun.lock`；TypeScript、Vite 和设计检查均由 Bun 执行。`bun run build` 自动构建并内嵌 GUI 静态资源。
 
 产物为 `dist/tutor-<平台>-<架构>`，可以移动、重命名为 `tutor` 后直接执行。主程序、记忆扩展、书签脚本和运行资源随可执行文件提供；文档排版及绘图工具按安装说明准备。Linux 目标使用 glibc，x64 使用 baseline 指令集；不包含 Windows 或 musl 构建。
 
 配置好导出和绘图依赖后运行 `bun run test`。通过 `TUTOR_TEST_BINARY=/absolute/path/to/tutor bun run test` 可让同一组集成测试直接验证编译后的程序，而非源码入口。跨平台构建成功不代表已在对应平台运行验证。
 
-[Bun distribution 工作流](.github/workflows/distribution.yml) 在 push、PR 和手动触发时构建四个平台，并在原生 Linux x64 runner 上移除 `node_modules` 后运行打包产物的 `doctor` 和全部集成测试。成功运行的 [GitHub Actions](https://github.com/cqu-moe/tutor/actions/workflows/distribution.yml) 提供 `tutor-executables` 下载，包含四个可执行文件及 `SHA256SUMS`，保留 7 天。
+[Bun distribution 工作流](.github/workflows/distribution.yml) 在 push、PR 和手动触发时构建四个平台，并在原生 Linux x64 runner 上移除 `node_modules` 后运行打包产物的 `doctor` 和全部集成测试。成功运行的 [GitHub Actions](https://github.com/cqu-moe/tutor/actions/workflows/distribution.yml) 提供 `tutor-executables` 下载，包含四个可执行文件、`SHA256SUMS` 和记录源码提交、锁文件哈希与 Bun 版本的 `BUILD-PROVENANCE.txt`，保留 7 天。
 
 ## 第一版范围
 

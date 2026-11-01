@@ -24,21 +24,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0; reads packageManager
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       - name: Confirm native x64 runner and install packages
         run: |
           test "$(uname -m)" = x86_64
           test "$(id -u)" -ne 0
-          bun install --frozen-lockfile --ignore-scripts
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 22.22.0
-      - name: Install and check GUI packages
+          bun install --frozen-lockfile
+      - name: Check GUI design and types
         run: |
-          npm install --global pnpm@11.19.0
-          cd gui
-          pnpm install --frozen-lockfile
-          pnpm check:design
+          bun --no-env-file run check:design
+          bun --no-env-file run typecheck
       - name: Build four executables
         run: bun run build darwin-arm64 darwin-x64 linux-arm64 linux-x64
       - name: Install Linux document dependencies
@@ -93,7 +90,14 @@ jobs:
         run: bun run test
       - name: Generate artifact checksums
         working-directory: dist
-        run: sha256sum tutor-* > SHA256SUMS
+        run: |
+          {
+            echo "source-commit=$GITHUB_SHA"
+            echo "bun-revision=$(bun --revision)"
+            printf 'bun-lock-sha256='
+            sha256sum "$GITHUB_WORKSPACE/bun.lock" | cut -d' ' -f1
+          } > BUILD-PROVENANCE.txt
+          sha256sum tutor-* > SHA256SUMS
       - name: Upload verified build artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

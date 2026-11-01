@@ -28,16 +28,14 @@ tutor --env-file "$HOME/.config/tutor/env" gui --ocr mistral --data-dir .tutor
 
 ## 开发
 
-后端继续使用 Bun 1.4.4+。前端由 CQU Moe Design 生成器创建，保留其独立 pnpm 11.19.0、Node.js 22.12+ 工具链和锁文件；`.design/` 包随源码提交。
+主程序与 GUI 共用 Bun 1.4.4+、根工作区和根 `bun.lock`。前端由 CQU Moe Design 生成器创建，本地 `.design/` 发布包和主题覆盖项随源码提交。
 
 ```sh
-bun install --frozen-lockfile --ignore-scripts
-cd gui
-pnpm install --frozen-lockfile
-pnpm build
-pnpm check:design
-cd ..
+bun install --frozen-lockfile
+bun run --filter @cqu-moe/tutor-gui build
+bun run check:design
+bun run typecheck
 bun run gui --no-open
 ```
 
-前端修改后重新 `pnpm build` 并重启 GUI。独立的 Vite 开发服务器没有 Tutor 会话，不作为可用工作台入口。`bun run build` 会先构建前端，再将其编入所有请求的可执行文件。GUI HTTP 集成测试在 `test/gui.test.js`；同样支持 `TUTOR_TEST_BINARY` 验证打包产物。
+前端修改后重新运行 GUI 构建并重启 GUI。独立的 Vite 开发服务器没有 Tutor 会话，不作为可用工作台入口。`bun run build` 会先构建前端，再将其编入所有请求的可执行文件。GUI HTTP 集成测试在 `test/gui.test.js`；同样支持 `TUTOR_TEST_BINARY` 验证打包产物。

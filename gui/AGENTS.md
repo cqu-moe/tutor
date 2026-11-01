@@ -12,7 +12,7 @@
 - 业务请求、认证、权限由本项目负责；演示数据/定时器须替换。真实成功依赖服务端确认。
 - 保持双主题、桌面/手机完整操作、键盘和减少动态效果。样式使用语义变量。
 - 具体设计用 emil-ask-emil 路由技能，动效用 animate；技能缺失时按包内具体规则执行并报告。
-- 交付前执行 pnpm build、pnpm check:design 和本项目交互测试，按 dist/docs/acceptance.md 报告结果、版本、例外及人工待验项。
+- 交付前在仓库根执行 `bun run --filter @cqu-moe/tutor-gui build`、`bun run check:design` 和本项目交互测试，按 dist/docs/acceptance.md 报告结果、版本、例外及人工待验项。
 - 发现设计系统缺陷/缺口按 dist/docs/feedback-contract.md 提醒用户。只有明确授权和指定 issue 仓库才创建 issue；默认交付反馈记录，不自行分叉组件。
 
 需要修改共享设计系统时回到它的源码仓库，遵守该仓库维护入口；不要把维护步骤混入本项目的业务工作。

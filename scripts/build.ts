@@ -10,8 +10,11 @@ if (selected.some((target) => !targets.includes(target))) {
 }
 const root = path.resolve(import.meta.dirname, "..");
 process.chdir(root);
-const guiBuild = Bun.spawn(["pnpm", "run", "build"], { cwd: path.join(root, "gui"), stdout: "inherit", stderr: "inherit" });
-if (await guiBuild.exited !== 0) throw new Error("GUI build failed; install its dependencies with pnpm in gui/");
+const guiBuild = Bun.spawn(
+  [process.execPath, "--no-env-file", "run", "--filter", "@cqu-moe/tutor-gui", "build"],
+  { cwd: root, stdout: "inherit", stderr: "inherit" },
+);
+if (await guiBuild.exited !== 0) throw new Error("GUI build failed; run bun install --frozen-lockfile at the repository root");
 const pi = path.dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const resources = ".build/resources";
 await rm(resources, { recursive: true, force: true });

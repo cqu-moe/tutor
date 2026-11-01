@@ -4,4 +4,4 @@ Tutor uses Bun for dependency installation, source execution, tests and standalo
 
 Build targets are macOS ARM64/x64 and Linux ARM64/x64 with glibc. `tutor doctor` diagnoses local prerequisites without installing software or calling model/OCR APIs; only an explicit `--env-file` loads environment files, and inherited environment variables take precedence. Platform execution and cross-compilation are reported separately.
 
-The local GUI embeds prebuilt static assets in the same executable and invokes the existing CLI as a child process. Its CQU Moe Design scaffold retains a separate pinned pnpm/Node development toolchain; this is a build-time requirement only. Released Tutor executables still require neither Node.js nor Bun at runtime.
+The local GUI embeds prebuilt static assets in the same executable and invokes the existing CLI as a child process. The GUI is built by the same Bun workspace and root lockfile; Node.js and pnpm are not development requirements. Released Tutor executables still require neither Node.js nor Bun at runtime.

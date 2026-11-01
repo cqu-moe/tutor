@@ -36,7 +36,7 @@ The passing suites exercise real Python/Schemdraw/CeTZ/Typst/Recto/Pandoc/Popple
 To rerun on a native target after configuring its document tools:
 
 ```sh
-bun install --frozen-lockfile --ignore-scripts
+bun install --frozen-lockfile
 bun run build
 TUTOR_TEST_BINARY="$PWD/dist/tutor-$(uname -s | tr '[:upper:]' '[:lower:]')-$(bun -p process.arch)" bun run test
 ```
@@ -46,7 +46,7 @@ These results do not establish live model/OCR access, native Intel Mac compatibi
 ## Prepare an isolated run
 
 ```sh
-bun install --frozen-lockfile --ignore-scripts
+bun install --frozen-lockfile
 python3 /path/to/recto/skills/recto/scripts/doctor.py --style reference
 ```
 
