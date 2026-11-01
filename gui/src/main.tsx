@@ -210,12 +210,15 @@ function Courses({ state, refresh }: { state: GuiState; refresh: () => void }) {
       {state.job && (
         <JobStatus
           job={state.job}
+          refresh={refresh}
           courseId={
             state.courses.find((course) => course.name === state.job?.course)
               ?.id
           }
         />
       )}
+      {state.pending.length > 0 && <Alert><AlertTitle>旧工作保留待处理</AlertTitle><AlertDescription><ul>{state.pending.map(item => <li key={item.path}>{item.path}：没有接纳记录，请先检查本地文件，再明确创建新任务。</li>)}</ul></AlertDescription></Alert>}
+      {state.tasks.length > 1 && <details><summary>其他保存的任务</summary>{state.tasks.filter(task => task.id !== state.job?.id).map(task => <JobStatus key={task.id} job={task} courseId={task.courseSlug} refresh={refresh} />)}</details>}
       {!state.courses.length ? (
         <div className="welcome panel">
           <div className="welcome-intro">

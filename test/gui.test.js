@@ -259,7 +259,7 @@ test("GUI import persists an adjusted route across restart without repeating OCR
     body: JSON.stringify({ id: pending.id, defer: true }),
   });
   assert.equal(deferred.status, 200);
-  await waitForJob(second.request, (job) => job.status === "succeeded" && job.stage === "saved");
+  await waitForJob(second.request, (job) => job.status === "awaiting-route");
   assert.equal(JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8")).context.confirmedAt, null);
   assert.equal((await second.request("/api/jobs", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -275,7 +275,7 @@ test("GUI import persists an adjusted route across restart without repeating OCR
     body: JSON.stringify({ id: (await (await second.request("/api/state")).json()).job.id, feedback: "Explain gates first" }),
   });
   assert.equal(failedInput.status, 200);
-  const failed = await waitForJob(second.request, (job) => job.status === "failed");
+  const failed = await waitForJob(second.request, (job) => job.status === "needs-attention");
   assert.doesNotMatch(JSON.stringify(failed), new RegExp(modelSecret));
   assert.doesNotMatch(JSON.stringify(failed), /gui-upstream-fixture-detail/);
   assert.equal(JSON.parse(await readFile(path.join(courseDir, "draft.json"), "utf8")).route, persisted.route);
@@ -341,9 +341,9 @@ test("GUI confirmation persists before a controlled generation export failure", 
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id: awaiting.id, confirm: true, route: "## Teaching order\n1. Logic gates" }),
   });
-  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.status, 200, await confirmed.clone().text());
 
-  const failed = await waitForJob(gui.request, (job) => job.status === "failed");
+  const failed = await waitForJob(gui.request, (job) => job.status === "needs-attention");
   assert.match(failed.log, /Recto export failed/);
   assert.doesNotMatch(JSON.stringify(failed), new RegExp(modelSecret));
 

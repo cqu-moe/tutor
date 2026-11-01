@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { createOutput, request, saveCache } from "./ocr.ts";
 import type { Input } from "./types.ts";
@@ -11,7 +11,7 @@ const mimeTypes = new Map([
   [".pdf", "application/pdf"],
 ]);
 
-export async function parseWithMistral(inputs: Input[], baseUrl: string, apiKey: string) {
+export async function parseWithMistral(inputs: Input[], baseUrl: string, apiKey: string, recovery?: { signal: AbortSignal }) {
   for (const input of inputs) {
     const extension = path.extname(input.uploadPath).toLowerCase();
     const mimeType = mimeTypes.get(extension);
@@ -20,11 +20,22 @@ export async function parseWithMistral(inputs: Input[], baseUrl: string, apiKey:
     const document = extension === ".pdf"
       ? { type: "document_url", document_url: `data:application/pdf;base64,${bytes.toString("base64")}` }
       : { type: "image_url", image_url: `data:${mimeType};base64,${bytes.toString("base64")}` };
-    const { bytes: raw, status } = await request(`${baseUrl}/v1/ocr`, {
+    const receipt = `${input.parsedDirectory}.received.json`;
+    let raw: Buffer, status = 200;
+    try { raw = await readFile(receipt); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (!apiKey) throw new Error('MISTRAL_API_KEY is required for Mistral OCR.');
+      const response = await request(`${baseUrl}/v1/ocr`, {
       method: "POST",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({ model: "mistral-ocr-latest", document, include_image_base64: true }),
-    }, "Mistral OCR", 100 * 1024 * 1024);
+    }, "Mistral OCR", 100 * 1024 * 1024, 120_000, recovery?.signal);
+      raw = response.bytes; status = response.status;
+      await import('node:fs/promises').then(fs => fs.mkdir(path.dirname(receipt), { recursive: true }));
+      await writeFile(`${receipt}.tmp`, raw);
+      await rename(`${receipt}.tmp`, receipt);
+    }
     let payload: any;
     try {
       payload = JSON.parse(raw.toString("utf8"));

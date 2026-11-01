@@ -1,19 +1,24 @@
-import { execFile } from "node:child_process";
+import { ownedCommand } from "./owned-process.ts";
 import { access, lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { memoryDirectory } from "./memory-store.ts";
 import { sandboxOptions } from "./assets.ts";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
-import { createBashToolDefinition, createLocalBashOperations, createEditToolDefinition, createWriteToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, createBashToolDefinition, createEditToolDefinition, createWriteToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-export async function stageTools(courseDir: string, stage: string): Promise<ToolDefinition[]> {
+export async function stageTools(courseDir: string, stage: string, agentDir = getAgentDir()): Promise<ToolDefinition[]> {
   const root = await realpath(stage);
   const temporary = path.join(root, ".tmp");
-  await mkdir(temporary);
-  const environment = { ...process.env, TMPDIR: temporary, CLAUDE_CODE_TMPDIR: temporary,
+  await mkdir(temporary, { recursive: true });
+  if (await realpath(temporary) !== temporary) throw new Error("Tutor stage temporary directory must not be a symbolic link");
+  const credentialDirectories = [...new Set([path.resolve(agentDir), path.resolve(getAgentDir()), await realpath(agentDir).catch(() => path.resolve(agentDir)), await realpath(getAgentDir()).catch(() => path.resolve(getAgentDir()))])];
+  // Document commands have no provider/network role. Pass only the environment
+  // they actually need, rather than attempting to enumerate every secret name.
+  const documentVariables = ['PATH','HOME','USER','LOGNAME','SHELL','LANG','LC_ALL','LC_CTYPE','TERM','NO_COLOR','TUTOR_DIAGRAM_PYTHON','TUTOR_TYPST_PACKAGE_CACHE','TUTOR_PYTHON','TUTOR_RECTO_ROOT','TUTOR_STUDY_NOTES'];
+  const environment = { ...Object.fromEntries(documentVariables.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])), TMPDIR: temporary, CLAUDE_CODE_TMPDIR: temporary,
     XDG_CACHE_HOME: temporary, MPLCONFIGDIR: temporary, PYTHONDONTWRITEBYTECODE: "1" };
   async function sandbox<T>(command: string, execute: (wrapped: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (!["darwin", "linux"].includes(process.platform)) throw new Error("Tutor stage sandbox requires macOS or Linux");
@@ -24,7 +29,7 @@ export async function stageTools(courseDir: string, stage: string): Promise<Tool
         ...await sandboxOptions(),
         network: { allowedDomains: [], deniedDomains: [] },
         filesystem: {
-          denyRead: [path.dirname(courseDir), memoryDirectory(courseDir), path.join(courseDir, ".sessions"), path.join(courseDir, ".durable"), path.join(courseDir, "revision-session.json")].map((directory) => ({ path: directory, literal: true })),
+          denyRead: [...credentialDirectories, path.dirname(courseDir), memoryDirectory(courseDir), path.join(courseDir, ".sessions"), path.join(courseDir, ".durable"), path.join(courseDir, "revision-session.json")].map((directory) => ({ path: directory, literal: true })),
           allowRead: [{ path: root, literal: true }], allowWrite: [{ path: root, literal: true }],
           denyWrite: ["/tmp/claude", "/private/tmp/claude", path.join(homedir(), ".npm/_logs"), path.join(homedir(), ".claude/debug")]
             .map((directory) => ({ path: directory, literal: true })),
@@ -49,12 +54,9 @@ export async function stageTools(courseDir: string, stage: string): Promise<Tool
     const code = content === undefined
       ? "require('node:fs').mkdirSync(process.argv[1], {recursive:true})"
       : "require('node:fs').writeFileSync(process.argv[1], require('node:fs').readFileSync(0))";
-    await sandbox(`BUN_BE_BUN=1 ${quote(process.execPath)} --no-env-file -e ${quote(code)} ${quote(target)}`, (wrapped) => new Promise<void>((resolve, reject) => {
-      const child = execFile("/bin/bash", ["-c", wrapped], { cwd: courseDir, env: environment, timeout: 30_000 }, (error, _stdout, stderr) => error
-        ? reject(new Error(`Tutor stage write failed: ${stderr.slice(-1000) || error.code}`)) : resolve());
-      child.stdin!.on("error", () => {});
-      child.stdin!.end(content);
-    }));
+    await sandbox(`BUN_BE_BUN=1 ${quote(process.execPath)} --no-env-file -e ${quote(code)} ${quote(target)}`, async wrapped => {
+      await ownedCommand("/bin/bash", ["-c", wrapped], { cwd: courseDir, env: environment, timeout: 30_000, input: content });
+    });
   }
   async function writable(file: string) {
     let existing = file;
@@ -89,8 +91,10 @@ export async function stageTools(courseDir: string, stage: string): Promise<Tool
       writeFile: (file, content) => mutate(file, content),
     } }),
     createBashToolDefinition(courseDir, { exposeSessionEnvironment: false, operations: {
-      exec: (command, cwd, options) => sandbox(command, (wrapped) => createLocalBashOperations({ shellPath: "/bin/bash" })
-        .exec(wrapped, cwd, { ...options, env: { ...options.env, ...environment } }), options.signal),
+      exec: (command, cwd, options) => sandbox(command, async wrapped => {
+        const result = await ownedCommand("/bin/bash", ["-c", wrapped], { cwd, env: environment, signal: options.signal, timeout: options.timeout ? options.timeout * 1000 : 120000, onData: options.onData });
+        return { exitCode: result.exitCode };
+      }, options.signal),
     } }),
   ];
   // Keep model mutations serial so one tool cannot replace another's checked path.

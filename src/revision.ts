@@ -1,8 +1,9 @@
-import { copyFile, cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { promptWithMemory } from "./memory.ts";
+import { NeedsAttention } from "./teaching.ts";
+import { teachingPrompt, type TeachingModel } from "./teaching-model.ts";
 import { selectionScope } from "./selection.ts";
-import { createTutorSession, imageContent } from "./runtime.ts";
+import { imageContent } from "./runtime.ts";
 import type { Lecture } from "./lecture-state.ts";
 
 async function validateLegacyPointer(courseDir: string) {
@@ -52,41 +53,27 @@ export async function reviseLecture(
   agentDir: string | undefined,
   model: string | undefined,
   feedback: string,
+  job: TeachingModel,
+  outputDirectory = "output",
 ) {
   if (!feedback.trim()) throw new Error("--revise requires learning feedback");
   if (!context.confirmedAt || !Number.isFinite(Date.parse(context.confirmedAt))) {
     throw new Error("Confirm the teaching route before revising the lecture");
   }
-  const output = path.join(courseDir, "output", "content.md");
+  const output = path.join(courseDir, outputDirectory, "content.md");
   let original: string;
   try {
-    original = await readFile(output, "utf8");
+    original = await readFile(job.original!, "utf8");
   } catch {
     throw new Error("Generate and export a lecture before revising it");
   }
   if (!original.trim()) throw new Error("The existing lecture is empty; regenerate it before revising");
 
   await validateLegacyPointer(courseDir);
-  const stage = await mkdtemp(path.join(courseDir, ".revision-"));
+  const stage = job.stage;
+  await mkdir(stage, { recursive: true });
   const source = path.join(stage, "content.md");
-  let session;
   try {
-    await copyFile(output, source);
-    await cp(path.join(courseDir, "output", "media"), path.join(stage, "media"), { recursive: true });
-    await cp(path.join(courseDir, "output", "figures"), path.join(stage, "figures"), { recursive: true }).catch((error) => {
-      if (error.code !== "ENOENT") throw error;
-    });
-    session = await createTutorSession(courseDir, agentDir, model, {
-      learnerFeedback: feedback,
-      systemPrompt: "Revise an existing lecture with the smallest precise edit. Do not rewrite untouched sections, headings, media references, citations, or formula conditions. Never infer learning progress from a revision.",
-      tools: ["read", "edit", "grep", "find"],
-      writeRoot: stage,
-    });
-    let toolFailed = false;
-    session.subscribe((event) => {
-      if (event.type === "tool_execution_end" && ["read", "edit", "grep", "find"].includes(event.toolName)
-        && (event.isError || event.result?.isError)) toolFailed = true;
-    });
     const images = await Promise.all([
       ...context.pages.map((page) => imageContent(page.originalPageImage)),
       ...context.screenshots.map((screenshot) => imageContent(screenshot.source)),
@@ -97,17 +84,16 @@ export async function reviseLecture(
       ...context.screenshots.map((screenshot) => `Screenshot ${screenshot.name}\n${screenshot.markdown}`),
     ].join("\n\n");
     console.log("Revising lecture with targeted edits...");
-    await promptWithMemory(session, `Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n${selectionScope(context.selection)}\nConfirmed route:\n${route}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, { images });
+    await teachingPrompt({ courseDir, agentDir, model, stage, key: job.requestId, retryBlocked: job.retryBlocked, signal: job.signal, feedback, systemPrompt: "Revise an existing lecture with the smallest precise edit. Do not rewrite untouched sections, headings, media references, citations, or formula conditions. Never infer learning progress from a revision.", toolNames: ["edit"], prompt: `Edit exactly ${relativeSource} with the edit tool. Keep every unchanged section byte-for-byte where practical. Return only a brief completion statement; do not print the lecture.\n${selectionScope(context.selection)}\nConfirmed route:\n${route}\n\nReusable parsed sources:\n${sources}\n\nLearner feedback: ${feedback}\n\nThe attached original pages/screenshots are for verification only.`, images });
     const revised = await readFile(source, "utf8");
-    if (toolFailed || revised === original) {
-      throw new Error(toolFailed ? "the revision tool failed" : "the model did not change the staged lecture");
+    if (revised === original) {
+      throw new Error("the model did not change the staged lecture");
     }
     const preserved = preservesOriginal(original, revised);
     if (preserved) throw new Error(preserved);
     return source;
   } catch (error) {
-    throw new Error(`Lecture revision failed; draft/assets retained in ${stage}: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    session?.dispose();
+    const message = `Lecture revision failed; draft/assets retained in ${stage}: ${error instanceof Error ? error.message : String(error)}`;
+    throw error instanceof NeedsAttention ? new NeedsAttention(message, error.unsafe) : new Error(message);
   }
 }

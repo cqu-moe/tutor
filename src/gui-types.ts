@@ -3,7 +3,9 @@ export type GuiJob = {
   id: string;
   course: string | null;
   action: GuiAction;
-  status: "running" | "awaiting-route" | "succeeded" | "failed";
+  status: "running" | "awaiting-route" | "succeeded" | "failed" | "cancelled" | "needs-attention";
+  canRetry?: boolean;
+  courseId?: string; courseSlug?: string; chapterId?: string; route?: string; routeHash?: string; continuation?: string; output?: string;
   stage: string;
   log: string;
 };
@@ -31,6 +33,8 @@ export type GuiCourse = {
 export type GuiState = {
   courses: GuiCourse[];
   job: GuiJob | null;
+  tasks: GuiJob[];
+  pending: Array<{ path: string; reason: string }>;
   config: { model: string; ocr: string; dataDir: string };
 };
 export type GuiChapterDetail = {

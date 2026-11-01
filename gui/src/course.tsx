@@ -119,6 +119,7 @@ function ChapterRow({
   onGenerate,
   onDownload,
   onResolveTitle,
+  onRevise,
 }: {
   chapter: GuiDetail['chapters'][number];
   routeConfirmed: boolean;
@@ -127,7 +128,9 @@ function ChapterRow({
   onGenerate: () => void;
   onDownload: (file: string) => void;
   onResolveTitle: (title: string) => void;
+  onRevise: (feedback: string) => Promise<void>;
 }) {
+  const [feedback, setFeedback] = useState('');
   return (
     <article className="chapter-row">
       <div className="chapter-main">
@@ -184,6 +187,7 @@ function ChapterRow({
               <ArrowDownToLine aria-hidden="true" />
               本章 PDF
             </Button>
+            <FeedbackForm label={`修订本章：${chapter.title}`} placeholder="说明本章需要修改的地方。" value={feedback} onChange={setFeedback} disabled={disabled} onSubmit={onRevise} />
             {chapter.lecture.content && (
               <details className="chapter-lecture">
                 <summary>阅读本章讲解稿</summary>
@@ -284,7 +288,7 @@ export function Course({
     chapterId: string,
     status: keyof typeof progressLabels,
   ) {
-    if (lock.current || active(state.job)) return;
+    if (lock.current || state.job?.status === 'running') return;
     lock.current = true;
     setSending(true);
     setError('');
@@ -300,7 +304,7 @@ export function Course({
     }
   }
   async function confirmChapterTitle(chapterId: string, title: string) {
-    if (lock.current || active(state.job)) return;
+    if (lock.current || state.job?.status === 'running') return;
     lock.current = true;
     setSending(true);
     setError('');
@@ -351,7 +355,7 @@ export function Course({
           )
         }
       />
-      {job && <JobStatus job={job} />}
+      {job && <JobStatus job={job} refresh={refresh} />}
       {error && (
         <div className="stack">
           <ErrorNotice message={error} />
@@ -416,7 +420,7 @@ export function Course({
                           key={chapter.id}
                           chapter={chapter}
                           routeConfirmed={course.confirmed}
-                          disabled={sending || active(state.job)}
+                          disabled={sending || state.job?.status === 'running'}
                           onProgress={(status) =>
                             void markProgress(chapter.id, status)
                           }
@@ -427,6 +431,7 @@ export function Course({
                               chapterId: chapter.id,
                             }).catch(() => {})
                           }
+                          onRevise={feedback => action({ action: 'revise', courseId: id, chapterId: chapter.id, feedback })}
                           onDownload={(file) =>
                             void downloadChapter(chapter.id, file)
                           }

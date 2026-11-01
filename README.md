@@ -44,6 +44,8 @@ tutor --course "Digital Design" --data-dir .tutor --chapters
 
 学习者记忆、模型和 OCR 配置、导出依赖、失败保全以及验收步骤见下方文档。Tutor 仅通过显式 `--env-file FILE` 读取配置文件；已有环境变量优先，不自动扫描当前目录的 `.env`。`doctor` 只做本地诊断，不自动安装、不调用模型或 OCR API。
 
+任务中断后可用 `tutor --data-dir .tutor tasks --json` 查看原任务，再用 `--task-id ID --resume` 继续；确认、取消和待处理原因会跨重启保存。详见 [任务中断续跑](docs/task-resumption.md)。
+
 ## 开发与构建
 
 ```sh

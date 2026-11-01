@@ -60,6 +60,10 @@ async function fixture(t) {
 // real GUI transport and authoritative progress must agree across new processes.
 test("CLI and GUI memory enforce current-course scope, explicit global, temporary requests and chapter authority", { timeout: 90000 }, async (t) => {
   const f = await fixture(t);
+  const noRequest = await f.raw("Logic", ["--memory", "resume", "--resume"]).exited;
+  assert.equal(noRequest.code, 1);
+  assert.match(noRequest.stderr, /No admitted memory request to resume/);
+  assert.equal(f.requests.length, 0, "memory resume cannot admit or execute an unrelated saved teaching route");
   const a = "#preference [[course:logic]] Use truth tables.";
   const b = "#preference [[course:calculus]] Use geometric examples.";
   const global = "#preference [[learner-global]] Prefer detailed derivations.";
@@ -131,20 +135,28 @@ test("CLI and GUI memory enforce current-course scope, explicit global, temporar
   f.steps([tool("memory_write", { content: "#weakness Unable to reason", inferred: true }), say("Saved")]);
   assert.equal((await f.raw("Logic", ["--memory", "Help me with this topic"]).exited).code, 1, "inferences without evidence must fail");
 
-  const guiChild = spawn(cliCommand[0], [...cliCommand.slice(1), "gui", "--no-open", "--port", "0", "--data-dir", f.data, "--agent-dir", f.agent, "--model", "fixture/memory-model"], { env: f.env });
+  async function openGui() {
+    const guiChild = spawn(cliCommand[0], [...cliCommand.slice(1), "gui", "--no-open", "--port", "0", "--data-dir", f.data, "--agent-dir", f.agent, "--model", "fixture/memory-model"], { env: f.env });
   let log = "";
   guiChild.stdout.on("data", (c) => log += c); guiChild.stderr.on("data", (c) => log += c);
   t.after(() => guiChild.kill("SIGTERM"));
   await waitUntil(() => /http:\/\/127\.0\.0\.1:\d+/.test(log), () => log);
   const url = log.match(/http:\/\/127\.0\.0\.1:\d+/)[0];
   const html = await (await fetch(url)).text(); const token = html.match(/name="tutor-session" content="([^"]+)"/)[1];
-  const request = (route, data) => fetch(url + route, { method: data ? "POST" : "GET", headers: { "x-tutor-session": token, "content-type": "application/json" }, body: data ? JSON.stringify(data) : undefined });
-  const marked = await request(`/api/courses/logic/chapters/${chapterId}/progress`, { status: "in_progress" });
+    const request = (route, data) => fetch(url + route, { method: data ? "POST" : "GET", headers: { "x-tutor-session": token, "content-type": "application/json" }, body: data ? JSON.stringify(data) : undefined });
+    return { request, async stop() { guiChild.kill("SIGTERM"); if (guiChild.exitCode === null && guiChild.signalCode === null) await new Promise(resolve => guiChild.once("exit", resolve)); } };
+  }
+  async function mark(status) {
+    const gui = await openGui();
+    try { return await gui.request(`/api/courses/logic/chapters/${chapterId}/progress`, { status }); }
+    finally { await gui.stop(); }
+  }
+  const marked = await mark("in_progress");
   assert.equal(marked.status, 200);
   assert.match(await f.invoke("Logic", "Show memory"), /Truth tables: in_progress/, "GUI marks and CLI memory share progress");
   await f.invoke("Logic", "I have not yet learned Truth tables", [tool("memory_write", { content: "#progress Truth tables", chapterId, status: "pending", evidence: "I have not yet learned Truth tables" }), echo]);
   assert.match((await f.raw("Logic", ["--chapters"]).exited).stdout, /pending/);
-  assert.equal((await request(`/api/courses/logic/chapters/${chapterId}/progress`, { status: "in_progress" })).status, 200);
+  assert.equal((await mark("in_progress")).status, 200);
   const forgottenProgress = await f.invoke("Logic", "Delete the chapter progress", [tool("memory_forget", { match: chapterId }), echo]);
   const progressRecovery = forgottenProgress.match(/Recovery ID: ([0-9a-f-]+)/i)[1];
   assert.match(await f.invoke("Logic", "Show memory"), /Truth tables: pending/);
@@ -155,6 +167,8 @@ test("CLI and GUI memory enforce current-course scope, explicit global, temporar
   assert.match((await f.raw("Calculus", ["--chapters"]).exited).stdout, /learned/, "other-course chapter progress survives correction/deletion/restoration");
 
   const before = await f.invoke("Calculus", "Show memory");
+  const gui = await openGui();
+  const request = gui.request;
   f.steps([read, echo]);
   const accepted = await request("/api/jobs", { action: "memory", courseId: "logic", feedback: "Show memory" });
   assert.equal(accepted.status, 202);
@@ -162,6 +176,7 @@ test("CLI and GUI memory enforce current-course scope, explicit global, temporar
   await waitUntil(async () => { job = (await (await request("/api/state")).json()).job; return ["failed", "succeeded"].includes(job?.status); }, () => JSON.stringify(job));
   assert.equal(job.status, "succeeded", job.log);
   assert.ok(job.log.includes(a) && job.log.includes(global) && !job.log.includes(b), job.log);
+  await gui.stop();
   assert.equal(await f.invoke("Calculus", "Show memory"), before, "maintenance never changes another course");
   // UUID, rather than directory slug, remains the memory owner after relocation.
   await rename(path.join(f.data, "logic"), path.join(f.data, "renamed-logic"));
@@ -178,7 +193,8 @@ test("CLI and GUI memory enforce current-course scope, explicit global, temporar
 test("CLI replays a memory effect killed after write but before receipt exactly once", { timeout: 60000 }, async (t) => {
   const f = await fixture(t);
   await f.raw("Logic", ["--chapters"]).exited;
-  await f.raw("Observer", ["--chapters"]).exited;
+  const observerData = path.join(f.root, "observer-data");
+  await f.raw("Observer", ["--data-dir", observerData, "--chapters"]).exited;
   const file = path.join(f.data, "logic", "course.json");
   const original = await readFile(file, "utf8");
   const backup = path.join(f.data, "logic", ".course-before-fifo.json");
@@ -201,7 +217,7 @@ test("CLI replays a memory effect killed after write but before receipt exactly 
   writer.stdin.end(original);
   await new Promise((resolve) => writer.once("exit", resolve));
   await rm(file); await rename(backup, file);
-  const visible = await f.invoke("Observer", "Show global memory");
+  const visible = await f.invoke("Observer", "Show global memory", [read, echo], ["--data-dir", observerData]);
   assert.equal(visible.split("Replay boundary canary.").length - 1, 1, "effect committed while the official receipt is blocked");
   assert.equal(first.child.exitCode, null);
   assert.equal(f.requests.length, 3, "blocked receipt cannot reach a post-tool request");
@@ -210,11 +226,11 @@ test("CLI replays a memory effect killed after write but before receipt exactly 
   await new Promise((resolve) => locked.once("exit", resolve)); locked = undefined;
   const resumed = await f.invoke("Logic", "resume", [echo], ["--resume"]);
   assert.match(resumed, /Learner memory saved/);
-  const after = await f.invoke("Observer", "Show global memory");
+  const after = await f.invoke("Observer", "Show global memory", [read, echo], ["--data-dir", observerData]);
   assert.equal(after.split("Replay boundary canary.").length - 1, 1);
   // Provider IDs deliberately repeat; a new admitted invocation still applies.
   await f.invoke("Logic", "Across courses remember replay boundary canary", [tool("memory_write", { scope: "global", content: "#preference [[learner-global]] Replay boundary canary." }), echo]);
-  assert.equal((await f.invoke("Observer", "Show global memory")).split("Replay boundary canary.").length - 1, 2);
+  assert.equal((await f.invoke("Observer", "Show global memory", [read, echo], ["--data-dir", observerData])).split("Replay boundary canary.").length - 1, 2);
 });
 
 test("legacy migration retries without loss, binds known progress, and quarantines mixed/unassigned records", { timeout: 60000 }, async (t) => {

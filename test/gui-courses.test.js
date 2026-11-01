@@ -24,11 +24,11 @@ async function body(request) {
   return JSON.parse(value);
 }
 
-function sse(response, text) {
+function sse(response, text, calls) {
   response.writeHead(200, { "content-type": "text/event-stream" });
   const base = { id: "gui-course-1", object: "chat.completion.chunk", created: 1, model: "gui-course-model" };
-  const delta = { ...base, choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] };
-  const end = { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
+  const delta = { ...base, choices: [{ index: 0, delta: calls ? { role: "assistant", tool_calls: calls } : { role: "assistant", content: text }, finish_reason: null }] };
+  const end = { ...base, choices: [{ index: 0, delta: {}, finish_reason: calls ? "tool_calls" : "stop" }] };
   response.end(`data: ${JSON.stringify(delta)}\n\ndata: ${JSON.stringify(end)}\n\ndata: [DONE]\n\n`);
 }
 
@@ -146,7 +146,13 @@ test("GUI exposes chapter progress, generation, and chapter files", { timeout: 9
   }));
 
   const modelUrl = await listen(createServer(async (request, response) => {
-    await body(request);
+    const payload = await body(request);
+    const messages = JSON.stringify(payload.messages);
+    if (messages.includes('Edit exactly')) {
+      if (payload.messages.at(-1).role === 'tool') return sse(response, 'Revision complete.');
+      const source = messages.match(/\.revision-[^\s]+\/content\.md/)[0];
+      return sse(response, '', [{ index: 0, id: 'edit-chapter', type: 'function', function: { name: 'edit', arguments: JSON.stringify({ path: source, edits: [{ oldText: 'An AND gate outputs 1 only when every input is 1.', newText: 'An AND gate needs both inputs at 1; the selected chapter was revised.' }] }) } }]);
+    }
     sse(response, "# Logic gates lecture\n\nAn AND gate outputs 1 only when every input is 1.");
   }));
   const agentDir = path.join(root, "pi");
@@ -206,6 +212,18 @@ test("GUI exposes chapter progress, generation, and chapter files", { timeout: 9
   assert.match(detail.chapters[0].lecture.content, /Logic gates lecture/);
   const pdf = await gui.request(`/api/courses/logic/chapters/${chapterId}/files/document.pdf`);
   assert.equal(pdf.status, 200);
+  const whole = await gui.request("/api/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "generate", courseId: "logic" }) });
+  assert.equal(whole.status, 202);
+  await waitForJob(gui.request, entry => entry.status === 'succeeded');
+  const beforeRevision = await (await gui.request('/api/courses/logic')).json();
+  const revised = await gui.request('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'revise', courseId: 'logic', chapterId, feedback: 'Clarify both inputs in this chapter' }) });
+  assert.equal(revised.status, 202);
+  await waitForJob(gui.request, entry => entry.status === 'succeeded');
+  const afterRevision = await (await gui.request('/api/courses/logic')).json();
+  assert.match(afterRevision.chapters[0].lecture.content, /selected chapter was revised/);
+  assert.equal(afterRevision.content, beforeRevision.content, 'selected chapter revision cannot change the whole-course output');
+  assert.deepEqual(afterRevision.chapters[1], beforeRevision.chapters[1], 'the other chapter remains unchanged');
+
 });
 
 test("GUI exposes and resolves ambiguous chapter titles", async (t) => {

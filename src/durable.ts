@@ -75,6 +75,11 @@ const MemoryConversationDoc = defineDoc({
 });
 
 // Select the latest request for a saved draft; Pi owns submission lookup/admission.
+const TeachingConversationDoc = defineDoc({
+  kind: "tutor.teaching-conversations", version: 1, scope: "session",
+  initial: () => ({ ids: {} as Record<string, string> }), checkpointWhen: () => false,
+});
+
 const RouteRequestDoc = defineDoc({
   kind: "tutor.route-request", version: 1, scope: "conversation",
   history: "latest", fork: "initial",
@@ -130,9 +135,14 @@ function safeModelStream(model: Model<Api>, start: () => AssistantMessageEventSt
 }
 
 function safeProviderStreams(streams: ProviderStreams): ProviderStreams {
+  function reconciled(context: { messages: readonly any[] }) {
+    if (context.messages.some(message => message.role === "toolResult" && ["write","edit","bash"].includes(message.toolName) && message.isError && message.content.some((part: any) => part.type === "text" && /was interrupted/.test(part.text)))) {
+      throw new Error("Interrupted stage tool outcome requires inspection before another model request");
+    }
+  }
   return {
-    stream: (model, context, options) => safeModelStream(model, () => streams.stream(model, context, options)),
-    streamSimple: (model, context, options) => safeModelStream(model, () => streams.streamSimple(model, context, options)),
+    stream: (model, context, options) => safeModelStream(model, () => { reconciled(context); return streams.stream(model, context, options); }),
+    streamSimple: (model, context, options) => safeModelStream(model, () => { reconciled(context); return streams.streamSimple(model, context, options); }),
     ...(streams.fetchDeferred ? {
       fetchDeferred: (model, handle, options) => safeModelStream(model, () => streams.fetchDeferred!(model, handle, options)),
     } satisfies Pick<ProviderStreams, "fetchDeferred"> : {}),
@@ -150,10 +160,11 @@ function inside(root: string, candidate: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function confinedExecutionEnv(options: { courseDir: string; cwd: string }): Promise<ExecutionEnv> {
+function confinedExecutionEnv(options: { courseDir: string; cwd: string; agentDir: string }): Promise<ExecutionEnv> {
   const target = new NodeExecutionEnv({ cwd: options.cwd });
   const lexicalRoot = path.resolve(options.courseDir);
-  return realpath(options.courseDir).then((canonicalRoot) => {
+  return realpath(options.courseDir).then(async (canonicalRoot) => {
+    const credentialRoots = await Promise.all([options.agentDir, getAgentDir()].map(directory => realpath(directory).catch(() => path.resolve(directory))));
     const readMethods = new Set([
       "readTextFile",
       "openTextLineReader",
@@ -230,7 +241,7 @@ function confinedExecutionEnv(options: { courseDir: string; cwd: string }): Prom
           }
           const canonical = await target.canonicalPath(absolute.value, args.at(-1) as never);
           if (!canonical.ok) return canonical;
-          if (!inside(canonicalRoot, canonical.value)) {
+          if (!inside(canonicalRoot, canonical.value) || credentialRoots.some(root => inside(root, canonical.value))) {
             return {
               ok: false as const,
               error: new FileError(
@@ -261,6 +272,7 @@ export async function openTutorDurableSession(options: {
   tools?: ToolRegistration[];
   extensions?: Extension[];
   channel?: "route" | "memory";
+  conversationKey?: string;
 }) {
   // Keep this observable read. Bun 1.4.4 honors Pi AI 1.4's incomplete
   // sideEffects metadata and can elide telemetry module initialization; without
@@ -356,7 +368,7 @@ export async function openTutorDurableSession(options: {
   const storageDir = path.join(options.courseDir, ".durable");
   await mkdir(storageDir, { recursive: true });
   const storage = await openNodeSqliteStorage(path.join(storageDir, "session.sqlite"));
-  const executionEnv = await confinedExecutionEnv({ courseDir: options.courseDir, cwd: options.courseDir });
+  const executionEnv = await confinedExecutionEnv({ courseDir: options.courseDir, cwd: options.courseDir, agentDir: effectiveAgentDir });
   const harness = await Harness.open(storage, {
     models: durableModels,
     registry,
@@ -369,13 +381,22 @@ export async function openTutorDurableSession(options: {
       tools,
     },
   });
-  if (options.channel === "memory") {
+  if (options.conversationKey) {
+    const id = await harness.commit(async (tx) => {
+      const pointers = await tx.doc(TeachingConversationDoc);
+      if (!pointers.ids[options.conversationKey!]) pointers.ids[options.conversationKey!] = String((await tx.createConversation({ ownership: { kind: "ownerless" } })).id);
+      return pointers.ids[options.conversationKey!];
+    }, BACKGROUND_CONTEXT);
+    const selected = await harness.conversation(Number(id) as never, BACKGROUND_CONTEXT);
+    if (!selected) throw new Error("Teaching conversation is missing");
+    conversation = selected;
+  } else if (options.channel === "memory") {
     const id = await harness.commit(async (tx) => {
       const pointer = await tx.doc(MemoryConversationDoc);
       if (!pointer.id) pointer.id = String((await tx.createConversation({ ownership: { kind: "ownerless" } })).id);
       return pointer.id;
     }, BACKGROUND_CONTEXT);
-    const selected = await harness.conversation(id as never, BACKGROUND_CONTEXT);
+    const selected = await harness.conversation(Number(id) as never, BACKGROUND_CONTEXT);
     if (!selected) throw new Error("Memory conversation is missing");
     conversation = selected;
   }
@@ -425,7 +446,21 @@ export async function openTutorDurableSession(options: {
     async wait(submissionId: string): Promise<DurableAnswer> {
       const submission = await harness.submission(submissionId as never, BACKGROUND_CONTEXT);
       if (!submission) throw new Error(`Durable submission ${submissionId} is not in this course`);
-      const settled = await submission.wait(BACKGROUND_CONTEXT);
+      let watching = false;
+      let timer: ReturnType<typeof setInterval> | undefined;
+      const parked = new Promise<never>((_resolve, reject) => {
+        timer = setInterval(async () => {
+          if (watching) return; watching = true;
+          try {
+            const inspection = await harness.inspect(BACKGROUND_CONTEXT);
+            if (inspection.tasks.some(item => item.record.conversationId === conversation.id && item.state.kind === "blocked")) reject(new Error("Official Pi model task reached its bounded restart limit; inspect the task and explicitly retry or cancel"));
+          } catch (error) { reject(error); }
+          finally { watching = false; }
+        }, 500);
+      });
+      let settled;
+      try { settled = await Promise.race([submission.wait(BACKGROUND_CONTEXT), parked]); }
+      finally { if (timer) clearInterval(timer); }
       let memoryFailure: string | undefined;
       let memoryFailureDetail = "";
       const recoveryIds: string[] = [];
@@ -440,7 +475,11 @@ export async function openTutorDurableSession(options: {
         for (const record of history.items) {
           if (!ToolResultEntry.is(record)) continue;
           const result = record.model[0];
-          if (result?.role !== "toolResult" || !memoryToolNames.includes(result.toolName)) continue;
+          if (result?.role !== "toolResult") continue;
+          if (result.isError && ["edit", "write", "bash"].includes(result.toolName)) {
+            throw new Error(`the ${result.toolName === "edit" ? "revision" : result.toolName} tool failed or its interrupted result is unknown; inspect the retained stage before continuing: ${result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n")}`);
+          }
+          if (!memoryToolNames.includes(result.toolName)) continue;
           if (result.isError) {
             memoryFailure ??= result.toolName;
             memoryFailureDetail = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -484,6 +523,19 @@ export async function openTutorDurableSession(options: {
         submissionId,
         text,
       };
+    },
+    async retryBlocked() {
+      const inspection = await harness.inspect(BACKGROUND_CONTEXT);
+      for (const item of inspection.tasks) if (item.record.conversationId === conversation.id && item.state.kind === "blocked" && item.state.reason === "restart_limit") await harness.retryTask(item.record.id, BACKGROUND_CONTEXT);
+    },
+    async lastAnswerText() {
+      const page = await conversation.entries({ order: "descending" }, 100, undefined, BACKGROUND_CONTEXT);
+      for (const entry of page.items) {
+        if (!AssistantEntry.is(entry)) continue;
+        const message = entry.model?.[0];
+        if (message?.role === "assistant") return message.content.filter(part => part.type === "text").map(part => part.text).join("\n");
+      }
+      return "";
     },
     async close() {
       await harness.close(BACKGROUND_CONTEXT);

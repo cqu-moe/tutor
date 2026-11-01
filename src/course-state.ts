@@ -19,6 +19,7 @@ export type CourseChapterLecture = {
   status: "none" | "generating" | "published" | "failed";
   output?: string;
   courseVersion: number;
+  operationId?: string;
 };
 
 export type CourseChapter = {
@@ -556,6 +557,7 @@ export async function recordChapterLecture(
   chapterId: string,
   status: CourseChapterLecture["status"],
   output?: string,
+  operationId?: string,
 ) {
   const course = await readCourse(courseDir);
   const chapter = course.chapters.find((entry) => entry.id === chapterId);
@@ -565,6 +567,7 @@ export async function recordChapterLecture(
     status: status === "published" ? "published" : chapter.lecture.status === "published" ? "published" : status,
     output: status === "published" ? output ?? chapter.lecture.output : chapter.lecture.output,
     courseVersion: course.version + 1,
+    ...(operationId ? { operationId } : {}),
   };
   await saveCourse(courseDir, course);
 }

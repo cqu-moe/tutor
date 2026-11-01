@@ -1,3 +1,5 @@
+import { useRef, useState } from 'react';
+import { post } from './api';
 import { Link } from 'react-router';
 import { ArrowRight } from 'lucide-react';
 import { Alert, AlertTitle, AlertDescription, Button } from '@cqu-moe/ui';
@@ -22,9 +24,9 @@ const stages: Record<string, string> = {
 const stageLabel = (job: GuiJob) =>
   job.status === 'awaiting-route'
     ? '教学路线已准备好，等待你确认'
-    : job.status === 'failed'
-      ? '任务未完成'
-      : job.status === 'succeeded'
+    : job.status === 'failed' || job.status === 'needs-attention'
+      ? '任务需要处理'
+      : job.status === 'cancelled' ? '任务已取消，不会自动恢复' : job.status === 'succeeded'
         ? job.stage === 'saved'
           ? '教学路线已保存，稍后可继续'
           : '任务已完成'
@@ -55,16 +57,28 @@ export function ErrorNotice({ message }: { message: string }) {
 export function JobStatus({
   job,
   courseId,
+  refresh,
 }: {
   job: GuiJob;
   courseId?: string;
+  refresh?: () => void;
 }) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const lock = useRef(false);
+  async function decide(body: Record<string, unknown>) {
+    if (lock.current) return;
+    lock.current = true; setSending(true); setError('');
+    try { await post('/api/jobs/input', { id: job.id, ...body }); refresh?.(); }
+    catch (error) { setError((error as Error).message); }
+    finally { lock.current = false; setSending(false); }
+  }
   return (
     <section className="job-status" aria-label="任务状态">
       <div className="row spread">
         <span
           role="status"
-          className={job.status === 'failed' ? 'error-text' : ''}
+          className={['failed','needs-attention'].includes(job.status) ? 'error-text' : ''}
         >
           {stageLabel(job)}
         </span>
@@ -83,7 +97,16 @@ export function JobStatus({
           </Link>
         </Button>
       )}
-      {job.log && (
+      <p className="muted">任务 {job.id}</p>
+      {job.status === 'needs-attention' && <p>{job.log}</p>}
+      {refresh && ['running', 'awaiting-route', 'needs-attention'].includes(job.status) && (
+        <div className="row">
+          {job.canRetry && <Button variant="outline" disabled={sending} onClick={() => void decide({ retry: true })}>继续原任务</Button>}
+          <Button variant="outline" disabled={sending} onClick={() => void decide({ cancel: true })}>取消任务</Button>
+        </div>
+      )}
+      {error && <p role="alert" className="error-text">{error}</p>}
+      {job.log && job.status !== 'needs-attention' && (
         <details>
           <summary>查看运行记录</summary>
           <pre className="log">{job.log}</pre>

@@ -85,9 +85,11 @@ async function startGui(t, dataDir, env) {
   const html = await (await fetch(url)).text();
   const token = html.match(/name="tutor-session" content="([^"]+)"/)?.[1];
   assert.ok(token);
-  return (pathname, init = {}) => fetch(url + pathname, {
+  const request = (pathname, init = {}) => fetch(url + pathname, {
     ...init, headers: { "x-tutor-session": token, ...init.headers },
   });
+  request.stop = async () => { child.kill("SIGTERM"); if (child.exitCode === null && child.signalCode === null) await new Promise(resolve => child.once("exit", resolve)); };
+  return request;
 }
 
 async function fixture(t) {
@@ -161,7 +163,7 @@ test("legacy published chapter stays viewable and byte-identical through append,
   assert.deepEqual(JSON.parse(chapterFiles["lecture.json"].toString()), originalLecture);
   for (const [file, bytes] of Object.entries(originalFiles)) assert.deepEqual(await readFile(path.join(courseDir, file)), bytes, file);
 
-  const request = await startGui(t, dataDir, env);
+  let request = await startGui(t, dataDir, env);
   const assertViewable = async () => {
     const response = await request("/api/courses/digital-design");
     assert.equal(response.status, 200);
@@ -194,6 +196,7 @@ test("legacy published chapter stays viewable and byte-identical through append,
       }
     }
   };
+  await request.stop();
   const supplement = await pdf("supplement", ["Combinational logic", "Sequential logic"]);
   await succeeds([...common, "--pdf", supplement, "--pages", "1-2"], env);
   await assertPreserved();
@@ -213,7 +216,9 @@ test("legacy published chapter stays viewable and byte-identical through append,
   assert.match(published, /Lecture exported/);
   await assertPreserved();
   assert.match(await readFile(path.join(courseDir, "output", "content.md"), "utf8"), /New whole course lecture/);
+  request = await startGui(t, dataDir, env);
   await assertViewable();
+  await request.stop();
   const reentered = await succeeds([...common, "--chapters"], env);
   assert.match(reentered, /\[learned\].*Boolean algebra.*lecture published/);
   await assertPreserved();
@@ -251,10 +256,11 @@ test("failed legacy binding preserves its inputs and retries using the published
   assert.equal(chapter.source.startHeading, "Boolean algebra");
   assert.deepEqual(await tree(path.join(courseDir, "chapters", chapter.id, "output")), originalOutput);
   for (const [file, bytes] of Object.entries(originalFiles)) assert.deepEqual(await readFile(path.join(courseDir, file)), bytes, file);
-  const request = await startGui(t, dataDir, env);
+  let request = await startGui(t, dataDir, env);
   const file = await request(`/api/courses/digital-design/chapters/${chapter.id}/files/document.pdf`);
   assert.equal(file.status, 200);
   assert.deepEqual(Buffer.from(await file.arrayBuffer()), originalOutput["document.pdf"]);
+  await request.stop();
   await succeeds([...common, "--chapters"], env);
   assert.equal(JSON.parse(await readFile(path.join(courseDir, "course.json"), "utf8")).chapters[0].id, chapter.id);
 });

@@ -88,7 +88,7 @@ export async function saveCache(input: Input, provider: OcrProvider, model: stri
 
 const controlCharacters = /[\u0000-\u001f\u007f]/g;
 
-export function safeReason(payload: any) {
+export function safeReason(payload: any, limit = 300) {
   const value = payload && typeof payload === "object" ? payload.msg ?? payload.message ?? payload.detail ?? payload.error?.message : payload;
   if (typeof value !== "string" || !value.trim()) return "unspecified API reason";
   let safe = value;
@@ -98,7 +98,7 @@ export function safeReason(payload: any) {
     }
   }
   return safe.trim().replace(controlCharacters, " ").replace(/https?:\/\/\S+/g, "[url redacted]")
-    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 300);
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, limit);
 }
 
 export function safeRelativePath(value: unknown): value is string {
@@ -128,14 +128,14 @@ export async function responseBytes(response: Response, limitBytes: number) {
   return Buffer.concat(chunks);
 }
 
-export async function request(url: string, init: RequestInit, stage: string, limit: number, timeout = 120_000) {
+export async function request(url: string, init: RequestInit, stage: string, limit: number, timeout = 120_000, signal?: AbortSignal) {
   let response: Response | undefined;
   try {
     const target = new URL(url);
     if (target.protocol !== "https:" && !(target.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(target.hostname))) {
       throw new Error("use HTTPS (HTTP is allowed only on loopback)");
     }
-    response = await fetch(target, { ...init, redirect: "error", signal: AbortSignal.timeout(timeout) });
+    response = await fetch(target, { ...init, redirect: "error", signal: AbortSignal.any([AbortSignal.timeout(timeout), ...signal ? [signal] : []]) });
     const bytes = await responseBytes(response, response.ok ? limit : 64 * 1024);
     if (!response.ok) {
       let reason: unknown;

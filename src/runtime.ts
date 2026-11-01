@@ -64,7 +64,7 @@ export async function createTutorSession(
     modelRuntime,
     model: requested.model,
     tools: [...tools, ...memoryTools],
-    customTools: [...await courseReadTools(courseDir, tools, options?.writeRoot), ...(options?.writeRoot ? await stageTools(courseDir, options.writeRoot) : [])],
+    customTools: [...await courseReadTools(courseDir, tools, options?.writeRoot), ...(options?.writeRoot ? await stageTools(courseDir, options.writeRoot, effectiveAgentDir) : [])],
     resourceLoader,
     sessionManager: SessionManager.inMemory(),
   });
