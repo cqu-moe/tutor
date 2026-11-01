@@ -1,8 +1,10 @@
 import { createInterface } from "node:readline";
-import { createTutorSession, imageContent } from "./runtime.ts";
-import { promptWithMemory } from "./memory.ts";
+import { createHash } from "node:crypto";
+import { imageContent } from "./runtime.ts";
+import { openTutorDurableSession, type DurablePromptPart, type TutorDurableSession } from "./durable.ts";
 import { selectionScope } from "./selection.ts";
 import { saveDraft, type Lecture } from "./lecture-state.ts";
+import { readCourse } from "./course-state.ts";
 
 export function createTerminalInput() {
   const lines = createInterface({ input: process.stdin, output: process.stdout });
@@ -35,9 +37,16 @@ export async function proposeRoute(
   resume = false,
 ) {
   const { context } = lecture;
-  const session = await createTutorSession(courseDir, agentDir, model, {
+  // Prose changes during adjustments; explicit chapter-title corrections instead
+  // establish new authority and must not be replaced by an older model answer.
+  const course = await readCourse(courseDir, context.course);
+  const chapters = course.chapters.map(({ id, title }) => ({ id, title }));
+  const resumeKey = createHash("sha256").update(JSON.stringify({ context, chapters })).digest("hex");
+  const session = await openTutorDurableSession({
+    courseDir,
+    agentDir,
+    model,
     systemPrompt: "You are a careful course tutor. Ground claims in supplied course material and cite original pages.",
-    tools: ["read"],
   });
 
   const originalImages = [
@@ -53,7 +62,10 @@ export async function proposeRoute(
   let output = "";
   let confirmed = false;
   try {
-    output = resume ? lecture.route : await promptWithMemory(session, ask, { images });
+    if (!resume) await session.reset();
+    output = resume
+      ? await resumeDurable(session, ask, images, lecture.route, resumeKey)
+      : await askDurable(session, ask, images, resumeKey);
     process.stdout.write(output);
     if (!output.trim()) {
       throw new Error("Pi route generation failed: the model returned no route");
@@ -80,7 +92,7 @@ export async function proposeRoute(
       process.stdout.write("\n");
       const current = output;
       output = "";
-      output = await promptWithMemory(session, `Adjust this teaching route. Record any explicit learner feedback before responding. Return the complete revised route.\n\nCurrent route:\n${current}\n\nUser adjustment: ${line}`);
+      output = await askDurable(session, `Adjust this teaching route. Record any explicit learner feedback before responding. Return the complete revised route.\n\nCurrent route:\n${current}\n\nUser adjustment: ${line}`, [], resumeKey);
       process.stdout.write(output);
       if (!output.trim()) {
         throw new Error("Pi route adjustment failed: the model returned no revised route");
@@ -92,6 +104,27 @@ export async function proposeRoute(
     }
   } finally {
     if (!confirmed) input.close();
-    session.dispose();
+    await session.close();
   }
+}
+
+async function askDurable(session: TutorDurableSession, prompt: string, images: DurablePromptPart[] = [], resumeKey?: string) {
+  const content = [{ type: "text" as const, text: prompt }, ...images];
+  const requestId = createHash("sha256").update(JSON.stringify(content)).digest("hex");
+  const receipt = await session.submit({ content, requestId, resumeKey });
+  const answer = await session.wait(receipt.submissionId);
+  return answer.text;
+}
+
+async function resumeDurable(
+  session: TutorDurableSession,
+  prompt: string,
+  images: DurablePromptPart[],
+  savedRoute: string,
+  resumeKey: string,
+) {
+  const content = [{ type: "text" as const, text: prompt }, ...images];
+  const requestId = createHash("sha256").update(JSON.stringify(content)).digest("hex");
+  const answer = await session.resumeSubmission(requestId, resumeKey);
+  return answer?.text ?? savedRoute;
 }

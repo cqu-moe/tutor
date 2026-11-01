@@ -2,7 +2,7 @@ import { cliCommand } from "./cli-command.js";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -31,7 +31,7 @@ function runCli(args, input, env) {
       settled = true;
       child.kill("SIGTERM");
       reject(new Error(`CLI timed out\n${stdout}\n${stderr}`));
-    }, 15_000).unref();
+    }, 45_000).unref();
   });
 }
 
@@ -162,7 +162,7 @@ test("default model receives original page and screenshot images", { timeout: 30
   }
 });
 
-test("model failures are actionable, redacted, and preserve course work", { timeout: 45_000 }, async () => {
+test("model failures are actionable, redacted before persistence, and bounded", { timeout: 90_000 }, async () => {
   const root = await mkdir(path.join(tmpdir(), `tutor-model-errors-${Date.now()}`), { recursive: true });
   const pdf = path.join(root, "lecture.pdf");
   await writeFile(path.join(root, "lecture.typ"), "#set page(width: 2cm, height: 2cm)\nBoolean algebra\n");
@@ -220,9 +220,34 @@ test("model failures are actionable, redacted, and preserve course work", { time
   const modelRequests = [];
   const modelSecret = "model-secret-value";
   const oauthSecret = "oauth-access-secret";
+  let liveDurableDir;
+  const liveFiles = new Set();
+  const leaks = [];
+  async function scanDurable(directory) {
+    const files = await readdir(directory);
+    assert.ok(files.includes("session.sqlite"), "scan the real durable store, including any WAL/SHM files");
+    for (const file of files) {
+      liveFiles.add(file);
+      const bytes = await readFile(path.join(directory, file));
+      for (const marker of [modelSecret, oauthSecret, "upstream-private-detail"]) {
+        if (bytes.includes(Buffer.from(marker))) leaks.push(file);
+      }
+    }
+  }
   const model = createServer(async (request, response) => {
     const payload = JSON.parse(await body(request));
     modelRequests.push(payload);
+    if (payload.model === "transient-model") {
+      if (modelRequests.filter((r) => r.model === payload.model).length > 1) await scanDurable(liveDurableDir);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(`data: ${JSON.stringify({ error: { message: `network error ${modelSecret}; ${oauthSecret}; upstream-private-detail` } })}\n\n`);
+      return;
+    }
+    if (payload.model === "quota-model") {
+      response.writeHead(429, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: `insufficient_quota ${modelSecret}; ${oauthSecret}; upstream-private-detail` } }));
+      return;
+    }
     if (payload.model === "failing-model") {
       response.writeHead(401, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: `Invalid API key: ${modelSecret}; access ${oauthSecret}; upstream-private-detail` } }));
@@ -244,6 +269,8 @@ test("model failures are actionable, redacted, and preserve course work", { time
       text: { ...base, apiKey: "text-key", models: [{ id: "text-model", input: ["text"] }] },
       invalid: { ...base, api: "not-a-protocol", apiKey: "protocol-key", models: [{ id: "protocol-model", input: ["text", "image"] }] },
       echo: { ...base, apiKey: `!printf ${modelSecret}`, models: [{ id: "failing-model", input: ["text", "image"] }] },
+      transient: { ...base, apiKey: "fixture-only", models: [{ id: "transient-model", input: ["text", "image"] }] },
+      quota: { ...base, apiKey: "fixture-only", models: [{ id: "quota-model", input: ["text", "image"] }] },
     },
   }));
 
@@ -253,10 +280,13 @@ test("model failures are actionable, redacted, and preserve course work", { time
     { model: "text/text-model", failure: /cannot read course images/ },
     { model: "invalid/protocol-model", failure: /unsupported model API protocol.*models.json/ },
     { model: "echo/failing-model", failure: /HTTP 401.*credentials/ },
+    { model: "transient/transient-model", failure: /Pi response failed.*provider availability/ },
+    { model: "quota/quota-model", failure: /HTTP 429.*quota/ },
   ];
   try {
     for (const [index, testCase] of cases.entries()) {
       const dataDir = path.join(root, `data-${index}`);
+      liveDurableDir = path.join(dataDir, "digital-design", ".durable");
       await assert.rejects(
         runCli([
           "--course", "Digital Design",
@@ -276,8 +306,15 @@ test("model failures are actionable, redacted, and preserve course work", { time
         },
       );
       await readFile(path.join(dataDir, "digital-design", "course.json"));
+      if (index >= 2) {
+        await scanDurable(liveDurableDir);
+        assert.deepEqual(leaks, [], "provider error bodies must never enter durable storage");
+      }
     }
-    assert.deepEqual(modelRequests.map((request) => request.model), ["failing-model"]);
+    assert.equal(modelRequests.filter((request) => request.model === "failing-model").length, 1, "401 is terminal");
+    assert.equal(modelRequests.filter((request) => request.model === "transient-model").length, 4, "transient errors retain Pi's three-retry limit");
+    assert.ok(liveFiles.has("session.sqlite-wal"), "scan the live WAL during durable retry backoff");
+    assert.ok(modelRequests.filter((request) => request.model === "quota-model").length <= 3, "quota errors must not enter Harness retries (the HTTP SDK may retry)");
   } finally {
     await new Promise((resolve) => mineru.close(resolve));
     await new Promise((resolve) => model.close(resolve));

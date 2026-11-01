@@ -242,7 +242,7 @@ test("CLI accumulates versioned chapters and protects learned entries", { timeou
     /Teaching route does not match the course chapters exactly/,
   );
   await assert.rejects(
-    () => runCli([...common, "--pdf", thirdPdf, "--pages", "1-2"], env, "confirm\n"),
+    () => runCli([...common, "--pdf", thirdPdf, "--pages", "1-2"], env, "Move pending chapters after protected chapters.\nconfirm\n"),
     /Teaching route would move protected chapter/,
   );
   const protectedRoute = await runCli([...common, "--chapters"], env);

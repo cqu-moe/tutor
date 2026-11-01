@@ -41,7 +41,7 @@ export async function prepareMemory(courseDir: string) {
   };
 }
 
-function modelFailure(error: unknown): Error {
+export function modelFailure(error: unknown): Error {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   if (message.startsWith("No API provider registered for api:")) {
     return new Error("Pi response failed: unsupported model API protocol; check the provider api field in models.json.");
