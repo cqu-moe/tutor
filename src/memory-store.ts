@@ -22,8 +22,19 @@ const MemoryDoc = defineDoc<MemoryState>({
 });
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 export const memoryDirectory = (courseDir: string) => path.resolve(process.env.PI_MEMORY_DIR || path.join(path.dirname(courseDir), ".memory"));
-const temporary = (feedback: string) => /(?:only (?:for|this)|this (?:time|reply|route) only|just (?:this|for now)|仅(?:这次|本次)|只(?:在|对)?(?:这次|本次)|临时)/i.test(feedback);
-const explicitGlobal = (feedback: string) => /(?:across courses|all (?:my )?courses|globally|global preference|所有课|全部课|全局|跨课)/i.test(feedback);
+const temporary = (feedback: string) => /(?:only (?:for )?this (?:time|reply|route|response|answer)|only for now|this (?:time|reply|route) only|just (?:this (?:time|reply|route)|for now)|仅(?:这次|本次)|只(?:在|对)?(?:这次|本次)|临时)/i.test(feedback);
+function explicitGlobal(feedback: string) {
+  // Mentioning a scope while excluding it does not grant access to that scope.
+  const courseOnly = /(?:\b(?:only|just)(?: for)? (?:this|the current) course\b|\b(?:this|the current) course only\b|(?:仅|只)(?:对|在|修改|删除|恢复)?(?:本|这门|当前)课)/i;
+  const excludedGlobal = /(?:\b(?:not|never|except|excluding|don't|do not)\b[^.;:，。；\n]*\b(?:global(?:ly)?|across courses|all (?:(?:my|future|other) )*courses)\b|(?:不|别|勿)[^，。；\n]*(?:全局|跨课|所有课|全部课|以后都这样))/i;
+  return !courseOnly.test(feedback) && !excludedGlobal.test(feedback)
+    && /(?:\b(?:across courses|all (?:(?:my|future|other) )*courses|globally|global (?:[a-z-]+ )*(?:preferences?|memory|scope))\b|所有课|全部课|全局|跨课|以后都这样)/i.test(feedback);
+}
+
+function readOnlyRequest(feedback: string) {
+  const query = /^\s*(?:(?:(?:please|can you|could you|would you)\s+)*(?:show|list|read|display|view|tell me|what|which|how|do you|have you)\b|(?:请|帮我|能否|可以)?(?:查看|查询|显示|列出|读取|展示|看看)|请问)/i;
+  return query.test(feedback) && /(?:\b(?:memory|memories|preferences?|progress|chapters?|remember|saved|stored|learned)\b|记忆|偏好|进度|章节|记录|学完)/i.test(feedback);
+}
 
 // pi-memory's generated timestamp owns the whole entry, including blank lines.
 function legacyBlocks(content: string) {
@@ -230,7 +241,8 @@ export async function executeMemory(courseDir: string, courseId: string, name: s
     if (args.scope && !["course", "global", courseId].includes(args.scope)) throw new Error("Memory scope must be the current course or explicit global");
     if (global && (tags.length || args.scope && args.scope !== "global")) throw new Error("Mixed memory scopes are not allowed");
     const scope = global ? "global" : courseId;
-    if (global && name === "memory_write" && !explicitGlobal(access.learnerFeedback!)) throw new Error("Global writes require explicit cross-course learner intent");
+    if (readOnlyRequest(access.learnerFeedback!)) throw new Error("A read-only request cannot change learner memory");
+    if (global && !explicitGlobal(access.learnerFeedback!)) throw new Error("Global mutations require explicit cross-course learner intent");
     let result: Receipt = { courseId, signature, text: "", progress: [], done: true };
     if (name === "memory_write") {
       if (!content) throw new Error("Memory content is required");
