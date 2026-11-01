@@ -3,3 +3,4 @@ env = false
 
 [install]
 registry = "https://registry.npmjs.org/"
+linker = "isolated"
