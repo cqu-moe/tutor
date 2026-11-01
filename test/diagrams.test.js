@@ -151,7 +151,7 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
         `pwd > ${JSON.stringify(path.join(stage, "figures", "observed-session-cwd"))}`,
         `"${process.env.TUTOR_DIAGRAM_PYTHON}" ${JSON.stringify(path.join(stage, "figures", "f4.py"))} ${JSON.stringify(path.join(stage, "media", "f4.svg"))}`,
         `typst compile --package-cache-path "${process.env.TUTOR_TYPST_PACKAGE_CACHE}" --font-path "${path.join(process.env.TUTOR_RECTO_ROOT, "assets/fonts")}" ${JSON.stringify(path.join(stage, "figures", "f4-view.typ"))} ${JSON.stringify(path.join(stage, "media", "f4-view.svg"))}`,
-        `cat > ${JSON.stringify(path.join(stage, "qa", "preview.typ"))} <<'PREVIEW'\n#set page(width: auto, height: auto, margin: 4pt)\n#grid(columns: 1, image("media/f4.svg", width: 12cm), image("media/f4-view.svg", width: 12cm))\nPREVIEW`,
+        `cat > ${JSON.stringify(path.join(stage, "qa", "preview.typ"))} <<'PREVIEW'\n#set page(width: auto, height: auto, margin: 4pt)\n#grid(columns: 1, image("/media/f4.svg", width: 12cm), image("/media/f4-view.svg", width: 12cm))\nPREVIEW`,
         `cd ${JSON.stringify(stage)} && typst compile --root . --ppi 180 qa/preview.typ qa/diagram-preview.png`,
       ].join("\n");
       return sse(response, call("bash", { command, timeout: 60 }), "tool_calls");
@@ -190,6 +190,11 @@ test("confirmed CLI lecture generates, inspects, exports, and preserves static d
   const generated = await runCli(common, "", env);
   assert.equal(generated.code, 0, `${generated.stderr}\n${JSON.stringify(modelRequests.at(-1)?.messages.filter((message) => message.role === "tool" && typeof message.content === "string"))}`);
   assert.match(generated.stdout, /Lecture exported/);
+  const generationMessages = modelRequests.at(-1).messages;
+  const toolErrors = generationMessages.filter(message => message.role === "tool" && JSON.stringify(message.content).includes("[error]"));
+  assert.deepEqual(toolErrors, [], "diagram generation and image reads must succeed");
+  const toolConversation = generationMessages.slice(generationMessages.findIndex(message => message.role === "assistant" && message.tool_calls));
+  assert.equal(toolConversation.flatMap(message => Array.isArray(message.content) ? message.content : []).filter(part => part.type === "image_url").length, 2, "both image reads must deliver attachments to the model");
   assert.equal(await readFile(path.join(courseDir, "output", "figures", "observed-session-cwd"), "utf8"), `${await realpath(courseDir)}\n`);
   const output = path.join(courseDir, "output");
   const markdown = await readFile(path.join(output, "content.md"), "utf8");

@@ -1,6 +1,7 @@
 import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const targets = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
 const requested = process.argv.slice(2);
@@ -20,6 +21,8 @@ const resources = ".build/resources";
 await rm(resources, { recursive: true, force: true });
 await mkdir(`${resources}/pi`, { recursive: true });
 await cp("gui/dist", `${resources}/gui`, { recursive: true });
+const durableRequire = createRequire(import.meta.resolve("@earendil-works/pi-durable"));
+await cp(durableRequire.resolve("@silvia-odwyer/photon/photon_rs_bg.wasm"), `${resources}/photon_rs_bg.wasm`);
 await cp(path.join(pi, "../package.json"), `${resources}/pi/package.json`);
 await cp(path.join(pi, "modes/interactive/theme"), `${resources}/pi/theme`, { recursive: true, filter: (file) => !path.extname(file) || file.endsWith(".json") });
 for (const arch of ["arm64", "x64"]) {

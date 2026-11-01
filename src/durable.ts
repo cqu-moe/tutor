@@ -40,6 +40,7 @@ import { openAIResponsesApi } from "pi-ai-1-4/api/openai-responses.lazy";
 import { piMessagesApi } from "pi-ai-1-4/api/pi-messages.lazy";
 import { defaultModel, imageContent } from "./runtime.ts";
 import { courseReadPath } from "./course-files.ts";
+import { durableImages } from "./assets.ts";
 import type { MemoryArgs } from "./memory-store.ts";
 import { memoryTools as memoryToolNames, modelFailure, prepareMemory, memoryParameters } from "./memory.ts";
 
@@ -225,7 +226,9 @@ function confinedExecutionEnv(options: { courseDir: string; cwd: string; agentDi
         return async (requestPath: string, ...args: unknown[]) => {
           const absolute = await target.absolutePath(requestPath, args.at(-1) as never);
           if (!absolute.ok) return absolute;
-          if (!inside(lexicalRoot, absolute.value) && !inside(canonicalRoot, absolute.value)) {
+          const canonical = await target.canonicalPath(absolute.value, args.at(-1) as never);
+          if (!inside(lexicalRoot, absolute.value) && !inside(canonicalRoot, absolute.value)
+            && (!canonical.ok || !inside(canonicalRoot, canonical.value))) {
             return {
               ok: false as const,
               error: new FileError(
@@ -239,7 +242,6 @@ function confinedExecutionEnv(options: { courseDir: string; cwd: string; agentDi
             const existing = await target.exists(requestPath, args.at(-1) as never);
             if (!existing.ok || !existing.value) return existing;
           }
-          const canonical = await target.canonicalPath(absolute.value, args.at(-1) as never);
           if (!canonical.ok) return canonical;
           if (!inside(canonicalRoot, canonical.value) || credentialRoots.some(root => inside(root, canonical.value))) {
             return {
@@ -257,7 +259,7 @@ function confinedExecutionEnv(options: { courseDir: string; cwd: string; agentDi
             const readOptions = args[0] as { noFollow?: boolean } | undefined;
             return current.openBinaryReader(canonical.value, { ...readOptions, noFollow: true }, args.at(-1) as never);
           }
-          return (value as (...callArgs: unknown[]) => unknown)(canonical.value, ...args);
+          return (value as (...callArgs: unknown[]) => unknown).call(current, canonical.value, ...args);
         };
       },
     }) as ExecutionEnv;
@@ -349,7 +351,7 @@ export async function openTutorDurableSession(options: {
     },
   }));
 
-  const safeRead = { ...createReadTool(), replay: "safe" as const };
+  const safeRead = { ...createReadTool({ images: await durableImages() }), replay: "safe" as const };
   const tools = [safeRead, ...scopedMemoryTools, ...(options.tools ?? [])];
   const registry = createRegistry();
   registry.install(defineExtension({
